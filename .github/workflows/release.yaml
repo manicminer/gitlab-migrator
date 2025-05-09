@@ -29,7 +29,7 @@ jobs:
       - name: Build
         run: |
           mkdir -p dist
-          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -o dist/gitlab-migrator-${{ matrix.goos }}-${{ matrix.goarch }}
+          CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -o dist/gitlab-migrator-${{ matrix.goos }}-${{ matrix.goarch }}
 
       - name: Upload binaries
         uses: actions/upload-artifact@v4
