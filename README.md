@@ -8,7 +8,7 @@ This tool can migrate projects from GitLab to repositories on GitHub. It current
 
 It does not support migrating issues, wikis or any other primitive at this time. PRs welcome!
 
-Both gitlab.com and GitLab self-hosted are supported, as well as github.com and GitHub Enterprise.
+Both gitlab.com and GitLab self-hosted are supported, as well as github.com and GitHub Enterprise (latter untested).
 
 ## Installing
 
