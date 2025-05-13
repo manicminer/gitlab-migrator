@@ -148,7 +148,7 @@ func main() {
 	retryClient := &retryablehttp.Client{
 		HTTPClient:   cleanhttp.DefaultPooledClient(),
 		Logger:       nil,
-		RetryMax:     16,
+		RetryMax:     2,
 		RetryWaitMin: 30 * time.Second,
 		RetryWaitMax: 300 * time.Second,
 	}
@@ -301,6 +301,7 @@ func main() {
 			os.Exit(1)
 		} else if errCount > 0 {
 			logger.Warn(fmt.Sprintf("encountered %d errors during migration, review log output for details", errCount))
+			os.Exit(1)
 		}
 	}
 }
