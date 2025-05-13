@@ -16,6 +16,8 @@ Both gitlab.com and GitLab self-hosted are supported, as well as github.com and 
 go install github.com/manicminer/gitlab-migrator
 ```
 
+or download the most appropriate binary for your OS & platform from the [latest release](https://github.com/manicminer/gitlab-migrator/releases/latest).
+
 Golang 1.23 was used, you may have luck with earlier releases.
 
 ## Usage
