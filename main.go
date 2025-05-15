@@ -790,13 +790,6 @@ func migratePullRequests(ctx context.Context, githubPath, gitlabPath []string, p
 					continue
 				}
 
-				// Starting with a merge commit is _probably_ wrong
-				if startCommit.NumParents() > 1 {
-					sendErr(fmt.Errorf("start commit %s for merge request %d has %d parents", mergeRequestCommits[0].ShortID, mergeRequest.IID, startCommit.NumParents()))
-					failureCount++
-					continue
-				}
-
 				if startCommit.NumParents() == 0 {
 					// Orphaned commit, start with an empty branch
 					// TODO: this isn't working as hoped, try to figure this out. in the meantime, we'll skip MRs from orphaned branches
@@ -806,13 +799,21 @@ func migratePullRequests(ctx context.Context, githubPath, gitlabPath []string, p
 					sendErr(fmt.Errorf("start commit %s for merge request %d has no parents", mergeRequestCommits[0].ShortID, mergeRequest.IID))
 					continue
 				} else {
-					// Branch out from parent commit
-					logger.Trace("inspecting start commit parent", "name", gitlabPath[1], "group", gitlabPath[0], "project_id", project.ID, "merge_request_id", mergeRequest.IID, "sha", mergeRequestCommits[0].ShortID)
-					startCommitParent, err := startCommit.Parent(0)
-					if err != nil {
-						sendErr(fmt.Errorf("loading parent commit: %s", err))
-						failureCount++
+					// Sometimes we will be starting from a merge commit, so look for a suitable parent commit to branch out from
+					var startCommitParent *object.Commit
+					for i := 0; i < startCommit.NumParents(); i++ {
+						logger.Trace("inspecting start commit parent", "name", gitlabPath[1], "group", gitlabPath[0], "project_id", project.ID, "merge_request_id", mergeRequest.IID, "sha", mergeRequestCommits[0].ShortID)
+						startCommitParent, err = startCommit.Parent(0)
+						if err != nil {
+							sendErr(fmt.Errorf("loading parent commit: %s", err))
+						}
+
 						continue
+					}
+
+					if startCommitParent == nil {
+						sendErr(fmt.Errorf("identifying suitable parent of start commit %s for merge request %d", mergeRequestCommits[0].ShortID, mergeRequest.IID))
+						failureCount++
 					}
 
 					logger.Trace("creating target branch for merged/closed merge request", "name", gitlabPath[1], "group", gitlabPath[0], "project_id", project.ID, "merge_request_id", mergeRequest.IID, "branch", mergeRequest.TargetBranch, "sha", startCommitParent.Hash)
