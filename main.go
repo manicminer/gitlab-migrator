@@ -803,6 +803,7 @@ func migratePullRequests(ctx context.Context, githubPath, gitlabPath []string, p
 					//if err = repo.Storer.SetReference(plumbing.NewSymbolicReference("HEAD", plumbing.ReferenceName(fmt.Sprintf("refs/heads/%s", mergeRequest.TargetBranch)))); err != nil {
 					//	return fmt.Errorf("creating empty branch: %s", err)
 					//}
+					sendErr(fmt.Errorf("start commit %s for merge request %d has no parents", mergeRequestCommits[0].ShortID, mergeRequest.IID))
 					continue
 				} else {
 					// Branch out from parent commit
