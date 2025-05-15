@@ -998,6 +998,7 @@ func migratePullRequests(ctx context.Context, githubPath, gitlabPath []string, p
 				pullRequest.Body = &body
 				pullRequest.Draft = &mergeRequest.Draft
 				pullRequest.State = newState
+				pullRequest.MaintainerCanModify = nil
 				if pullRequest, _, err = gh.PullRequests.Edit(ctx, githubPath[0], githubPath[1], pullRequest.GetNumber(), pullRequest); err != nil {
 					sendErr(fmt.Errorf("updating pull request: %v", err))
 					failureCount++
