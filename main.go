@@ -53,6 +53,11 @@ var (
 	maxConcurrency int
 )
 
+// Add userMapFile and userMap variables
+type userMapType map[string]string
+var userMapFile string
+var userMap = userMapType{}
+
 type Project = []string
 
 type Report struct {
@@ -122,9 +127,32 @@ func main() {
 	flag.StringVar(&gitlabProject, "gitlab-project", "", "the GitLab project to migrate")
 	flag.StringVar(&projectsCsvPath, "projects-csv", "", "specifies the path to a CSV file describing projects to migrate (incompatible with -gitlab-project and -github-repo)")
 
+	// Add user-map flag
+	flag.StringVar(&userMapFile, "usermap", "", "CSV file with gitlab,github username pairs")
+
 	flag.IntVar(&maxConcurrency, "max-concurrency", 4, "how many projects to migrate in parallel")
 
 	flag.Parse()
+
+	// Parse userMapFile if provided
+	if userMapFile != "" {
+		f, err := os.Open(userMapFile)
+		if err != nil {
+			logger.Error("reading user-map", "err", err)
+			os.Exit(1)
+		}
+		r := csv.NewReader(f)
+		for {
+			rec, err := r.Read()
+			if err != nil {
+				break
+			}
+			if len(rec) == 2 {
+				userMap[strings.TrimSpace(rec[0])] = strings.TrimSpace(rec[1])
+			}
+		}
+		_ = f.Close()
+	}
 
 	if githubUser == "" {
 		githubUser = os.Getenv("GITHUB_USER")

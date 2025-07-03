@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
+	"strings"
+	"testing"
 	"time"
 
 	"github.com/google/go-github/v69/github"
@@ -94,7 +96,14 @@ func getGitlabUser(username string) (*gitlab.User, error) {
 			}
 		}
 
-		return nil, fmt.Errorf("GitLab user not found: %s", username)
+		if gh, ok := userMap[username]; ok {
+			return &gitlab.User{
+				Username:   username,
+				Name:       fmt.Sprintf("%s (mapped to %s)", username, gh),
+				WebsiteURL: fmt.Sprintf("https://github.com/%s", gh),
+			}, nil
+		}
+		return &gitlab.User{Username: "ghost", Name: "Deleted User"}, nil
 	}
 
 	return user, nil
@@ -121,4 +130,28 @@ func roundDuration(d, r time.Duration) time.Duration {
 		return -d
 	}
 	return d
+}
+
+// Add unit test for getGitlabUser
+
+func Test_getGitlabUser_userMap(t *testing.T) {
+	// Save and restore original userMap
+	origUserMap := userMap
+	defer func() { userMap = origUserMap }()
+
+	userMap = map[string]string{"alice": "aliceGH"}
+
+	user, err := getGitlabUser("alice")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if user == nil {
+		t.Fatal("expected user, got nil")
+	}
+	if user.WebsiteURL != "https://github.com/aliceGH" {
+		t.Errorf("expected WebsiteURL https://github.com/aliceGH, got %s", user.WebsiteURL)
+	}
+	if !strings.Contains(user.Name, "aliceGH") {
+		t.Errorf("expected Name to contain aliceGH, got %s", user.Name)
+	}
 }
