@@ -616,6 +616,7 @@ func migrateProject(ctx context.Context, proj []string) error {
 	if err = repo.PushContext(ctx, &git.PushOptions{
 		RemoteName: "github",
 		Force:      true,
+		FollowTags: true,
 		//Prune:      true, // causes error, attempts to delete main branch
 	}); err != nil {
 		upToDateError := errors.New("already up-to-date")
