@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/csv"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"net/url"
@@ -61,9 +63,44 @@ type Report struct {
 	MergeRequestsCount int
 }
 
+type GitHubError struct {
+	Message          string
+	DocumentationURL string `json:"documentation_url"`
+}
+
 func sendErr(err error) {
 	errCount++
 	logger.Error(err.Error())
+}
+
+func unmarshalResp(resp *http.Response, model interface{}) error {
+	if resp == nil {
+		return nil
+	}
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("parsing response body: %+v", err)
+	}
+	resp.Body.Close()
+
+	// Trim away a BOM if present
+	respBody = bytes.TrimPrefix(respBody, []byte("\xef\xbb\xbf"))
+
+	// In some cases the respBody is empty, but not nil, so don't attempt to unmarshal this
+	if len(respBody) == 0 {
+		return nil
+	}
+
+	// Unmarshal into provided model
+	if err := json.Unmarshal(respBody, model); err != nil {
+		return fmt.Errorf("unmarshaling response body: %+v", err)
+	}
+
+	// Reassign the response body as downstream code may expect it
+	resp.Body = io.NopCloser(bytes.NewBuffer(respBody))
+
+	return nil
 }
 
 func main() {
@@ -218,6 +255,23 @@ func main() {
 		// Potential connection reset
 		if resp == nil {
 			return true, nil
+		}
+
+		// Token not authorized for org
+		if resp.StatusCode == http.StatusForbidden {
+			errResp := GitHubError{}
+			if err = unmarshalResp(resp, &errResp); err != nil {
+				return false, err
+			}
+			if match, err := regexp.MatchString("SAML enforcement", errResp.Message); err != nil {
+				return false, fmt.Errorf("matching 403 response: %v", err)
+			} else if match {
+				msg := errResp.Message
+				if errResp.DocumentationURL != "" {
+					msg += fmt.Sprintf(" - %s", errResp.DocumentationURL)
+				}
+				return false, fmt.Errorf("received 403 with response: %v", msg)
+			}
 		}
 
 		retryableStatuses := []int{
@@ -616,8 +670,21 @@ func migrateProject(ctx context.Context, proj []string) error {
 	if err = repo.PushContext(ctx, &git.PushOptions{
 		RemoteName: "github",
 		Force:      true,
-		FollowTags: true,
 		//Prune:      true, // causes error, attempts to delete main branch
+	}); err != nil {
+		upToDateError := errors.New("already up-to-date")
+		if errors.As(err, &upToDateError) {
+			logger.Debug("repository already up-to-date on GitHub", "name", gitlabPath[1], "group", gitlabPath[0], "url", githubUrl)
+		} else {
+			return fmt.Errorf("pushing to github repo: %v", err)
+		}
+	}
+
+	logger.Debug("pushing tags to GitHub repository", "name", gitlabPath[1], "group", gitlabPath[0], "url", githubUrl)
+	if err = repo.PushContext(ctx, &git.PushOptions{
+		RemoteName: "github",
+		Force:      true,
+		RefSpecs:   []config.RefSpec{"refs/tags/*:refs/tags/*"},
 	}); err != nil {
 		upToDateError := errors.New("already up-to-date")
 		if errors.As(err, &upToDateError) {
