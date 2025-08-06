@@ -673,8 +673,7 @@ func migrateProject(ctx context.Context, proj []string) error {
 		Force:      true,
 		//Prune:      true, // causes error, attempts to delete main branch
 	}); err != nil {
-		upToDateError := errors.New("already up-to-date")
-		if errors.As(err, &upToDateError) {
+		if strings.Contains(err.Error(), "already up-to-date") {
 			logger.Debug("repository already up-to-date on GitHub", "name", gitlabPath[1], "group", gitlabPath[0], "url", githubUrl)
 		} else {
 			return fmt.Errorf("pushing to github repo: %v", err)
