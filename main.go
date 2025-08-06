@@ -606,9 +606,10 @@ func migrateProject(ctx context.Context, proj []string) error {
 	}
 
 	logger.Debug("updating repository settings", "owner", githubPath[0], "repo", githubPath[1])
+	description := regexp.MustCompile("\r|\n").ReplaceAllString(project.Description, " ")
 	updateRepo := github.Repository{
 		Name:              pointer(githubPath[1]),
-		Description:       &project.Description,
+		Description:       &description,
 		Homepage:          &homepage,
 		AllowAutoMerge:    pointer(true),
 		AllowMergeCommit:  pointer(true),
