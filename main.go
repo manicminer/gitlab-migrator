@@ -1056,6 +1056,19 @@ func migratePullRequests(ctx context.Context, githubPath, gitlabPath []string, p
 				newState = pointer("closed")
 			}
 
+			if pullRequest.State != nil && newState != nil && *pullRequest.State != *newState {
+				pullRequestState := &github.PullRequest{
+					Number: pullRequest.Number,
+					State:  newState,
+				}
+
+				if pullRequest, _, err = gh.PullRequests.Edit(ctx, githubPath[0], githubPath[1], pullRequestState.GetNumber(), pullRequestState); err != nil {
+					sendErr(fmt.Errorf("updating pull request state: %v", err))
+					failureCount++
+					continue
+				}
+			}
+
 			if (newState != nil && (pullRequest.State == nil || *pullRequest.State != *newState)) ||
 				(pullRequest.Title == nil || *pullRequest.Title != mergeRequest.Title) ||
 				(pullRequest.Body == nil || *pullRequest.Body != body) ||
@@ -1065,7 +1078,6 @@ func migratePullRequests(ctx context.Context, githubPath, gitlabPath []string, p
 				pullRequest.Title = &mergeRequest.Title
 				pullRequest.Body = &body
 				pullRequest.Draft = &mergeRequest.Draft
-				pullRequest.State = newState
 				pullRequest.MaintainerCanModify = nil
 				if pullRequest, _, err = gh.PullRequests.Edit(ctx, githubPath[0], githubPath[1], pullRequest.GetNumber(), pullRequest); err != nil {
 					sendErr(fmt.Errorf("updating pull request: %v", err))
