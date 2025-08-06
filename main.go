@@ -795,6 +795,7 @@ func migratePullRequests(ctx context.Context, githubPath, gitlabPath []string, p
 						strings.Contains(pr.GetBody(), fmt.Sprintf("**GitLab MR Number** | [%d]", mergeRequest.IID)) {
 						logger.Debug("found existing pull request", "owner", githubPath[0], "repo", githubPath[1], "pr_number", pr.GetNumber())
 						pullRequest = pr
+						break
 					}
 				}
 			}
