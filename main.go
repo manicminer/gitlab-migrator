@@ -257,12 +257,15 @@ func main() {
 			return true, nil
 		}
 
-		// Token not authorized for org
-		if resp.StatusCode == http.StatusForbidden {
-			errResp := GitHubError{}
+		errResp := GitHubError{}
+		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
 			if err = unmarshalResp(resp, &errResp); err != nil {
 				return false, err
 			}
+		}
+
+		// Token not authorized for org
+		if resp.StatusCode == http.StatusForbidden {
 			if match, err := regexp.MatchString("SAML enforcement", errResp.Message); err != nil {
 				return false, fmt.Errorf("matching 403 response: %v", err)
 			} else if match {
@@ -298,7 +301,7 @@ func main() {
 
 		for _, status := range retryableStatuses {
 			if resp.StatusCode == status {
-				logger.Trace("retrying failed API request", "method", requestMethod, "url", requestUrl, "status", resp.StatusCode)
+				logger.Trace("retrying failed API request", "method", requestMethod, "url", requestUrl, "status", resp.StatusCode, "message", errResp.Message)
 				return true, nil
 			}
 		}
