@@ -12,6 +12,7 @@ Both gitlab.com and GitLab self-hosted are supported, as well as github.com and 
 
 ## Installing
 
+Download the [latest release](https://github.com/manicminer/gitlab-migrator/releases/latest) for your platform & architecture. Alternatively,
 ```
 go install github.com/manicminer/gitlab-migrator
 ```
