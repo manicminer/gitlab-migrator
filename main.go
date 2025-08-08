@@ -372,6 +372,28 @@ func main() {
 	}
 }
 
+func parseProjectSlugs(proj []string) ([]string, []string, error) {
+	if len(proj) != 2 {
+		return nil, nil, fmt.Errorf("too many fields")
+	}
+
+	delimPosition := strings.LastIndex(proj[0], "/")
+	gitlabPath := []string{
+		proj[0][:delimPosition],
+		proj[0][delimPosition+1:],
+	}
+	githubPath := strings.Split(proj[1], "/")
+
+	if len(gitlabPath) != 2 {
+		return nil, nil, fmt.Errorf("invalid GitLab project: %s", proj[0])
+	}
+	if len(githubPath) != 2 {
+		return nil, nil, fmt.Errorf("invalid GitHub project: %s", proj[1])
+	}
+
+	return gitlabPath, githubPath, nil
+}
+
 func printReport(ctx context.Context, projects []Project) {
 	logger.Debug("building report")
 
@@ -406,9 +428,11 @@ func printReport(ctx context.Context, projects []Project) {
 	fmt.Println()
 }
 
-func reportProject(ctx context.Context, proj []string) (*Report, error) {
-	gitlabPath := strings.Split(proj[0], "/")
-	//githubPath := strings.Split(proj[1], "/")
+func reportProject(_ context.Context, proj []string) (*Report, error) {
+	gitlabPath, _, err := parseProjectSlugs(proj)
+	if err != nil {
+		return nil, fmt.Errorf("parsing project slugs: %v", err)
+	}
 
 	logger.Debug("searching for GitLab project", "name", gitlabPath[1], "group", gitlabPath[0])
 	searchTerm := gitlabPath[1]
@@ -523,8 +547,10 @@ func performMigration(ctx context.Context, projects []Project) error {
 }
 
 func migrateProject(ctx context.Context, proj []string) error {
-	gitlabPath := strings.Split(proj[0], "/")
-	githubPath := strings.Split(proj[1], "/")
+	gitlabPath, githubPath, err := parseProjectSlugs(proj)
+	if err != nil {
+		return fmt.Errorf("parsing project slugs: %v", err)
+	}
 
 	logger.Info("searching for GitLab project", "name", gitlabPath[1], "group", gitlabPath[0])
 	searchTerm := gitlabPath[1]
