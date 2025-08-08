@@ -44,7 +44,7 @@ const (
 
 var loop, report bool
 var deleteExistingRepos, enablePullRequests, renameMasterToMain bool
-var githubDomain, githubRepo, githubToken, githubUser, gitlabDomain, gitlabProject, gitlabToken, projectsCsvPath string
+var githubDomain, githubRepo, githubToken, githubUser, gitlabDomain, gitlabProject, gitlabToken, projectsCsvPath, renameTrunkBranch string
 
 var (
 	cache          *objectCache
@@ -150,7 +150,7 @@ func main() {
 
 	flag.BoolVar(&deleteExistingRepos, "delete-existing-repos", false, "whether existing repositories should be deleted before migrating")
 	flag.BoolVar(&enablePullRequests, "migrate-pull-requests", false, "whether pull requests should be migrated")
-	flag.BoolVar(&renameMasterToMain, "rename-master-to-main", false, "rename master branch to main and update pull requests")
+	flag.BoolVar(&renameMasterToMain, "rename-master-to-main", false, "rename master branch to main and update pull requests (incompatible with -rename-trunk-branch)")
 
 	flag.StringVar(&githubDomain, "github-domain", defaultGithubDomain, "specifies the GitHub domain to use")
 	flag.StringVar(&githubRepo, "github-repo", "", "the GitHub repository to migrate to")
@@ -158,6 +158,7 @@ func main() {
 	flag.StringVar(&gitlabDomain, "gitlab-domain", defaultGitlabDomain, "specifies the GitLab domain to use")
 	flag.StringVar(&gitlabProject, "gitlab-project", "", "the GitLab project to migrate")
 	flag.StringVar(&projectsCsvPath, "projects-csv", "", "specifies the path to a CSV file describing projects to migrate (incompatible with -gitlab-project and -github-repo)")
+	flag.StringVar(&renameTrunkBranch, "rename-trunk-branch", "", "specifies the new trunk branch name (incompatible with -rename-master-to-main)")
 
 	flag.IntVar(&maxConcurrency, "max-concurrency", 4, "how many projects to migrate in parallel")
 
@@ -179,6 +180,11 @@ func main() {
 	}
 	if !repoSpecifiedInline && projectsCsvPath == "" {
 		logger.Error("must specify either -projects-csv or both of -github-repo and -gitlab-project")
+		os.Exit(1)
+	}
+
+	if renameMasterToMain && renameTrunkBranch != "" {
+		logger.Error("cannot specify -rename-master-to-main and -rename-trunk-branch together")
 		os.Exit(1)
 	}
 
@@ -584,7 +590,9 @@ func migrateProject(ctx context.Context, proj []string) error {
 	}
 
 	defaultBranch := "main"
-	if !renameMasterToMain && project.DefaultBranch != "" {
+	if renameTrunkBranch != "" {
+		defaultBranch = renameTrunkBranch
+	} else if !renameMasterToMain && project.DefaultBranch != "" {
 		defaultBranch = project.DefaultBranch
 	}
 
@@ -644,19 +652,19 @@ func migrateProject(ctx context.Context, proj []string) error {
 		return fmt.Errorf("cloning gitlab repo: %v", err)
 	}
 
-	if renameMasterToMain {
-		if masterBranch, err := repo.Reference(plumbing.NewBranchReferenceName("master"), false); err == nil {
-			logger.Info("renaming master branch to main prior to push", "name", gitlabPath[1], "group", gitlabPath[0], "sha", masterBranch.Hash())
+	if defaultBranch != project.DefaultBranch {
+		if gitlabTrunk, err := repo.Reference(plumbing.NewBranchReferenceName(project.DefaultBranch), false); err == nil {
+			logger.Info("renaming trunk branch prior to push", "name", gitlabPath[1], "group", gitlabPath[0], "gitlab_trunk", project.DefaultBranch, "github_trunk", defaultBranch, "sha", gitlabTrunk.Hash())
 
-			logger.Debug("creating main branch", "name", gitlabPath[1], "group", gitlabPath[0], "sha", masterBranch.Hash())
-			mainBranch := plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), masterBranch.Hash())
-			if err = repo.Storer.SetReference(mainBranch); err != nil {
-				return fmt.Errorf("creating main branch: %v", err)
+			logger.Debug("creating new trunk branch", "name", gitlabPath[1], "group", gitlabPath[0], "github_trunk", defaultBranch, "sha", gitlabTrunk.Hash())
+			githubTrunk := plumbing.NewHashReference(plumbing.NewBranchReferenceName(defaultBranch), gitlabTrunk.Hash())
+			if err = repo.Storer.SetReference(githubTrunk); err != nil {
+				return fmt.Errorf("creating trunk branch: %v", err)
 			}
 
-			logger.Debug("deleting master branch", "name", gitlabPath[1], "group", gitlabPath[0], "sha", masterBranch.Hash())
-			if err = repo.Storer.RemoveReference(masterBranch.Name()); err != nil {
-				return fmt.Errorf("deleting master branch: %v", err)
+			logger.Debug("deleting old trunk branch", "name", gitlabPath[1], "group", gitlabPath[0], "gitlab_trunk", project.DefaultBranch, "sha", gitlabTrunk.Hash())
+			if err = repo.Storer.RemoveReference(gitlabTrunk.Name()); err != nil {
+				return fmt.Errorf("deleting old trunk branch: %v", err)
 			}
 		}
 	}
@@ -708,13 +716,13 @@ func migrateProject(ctx context.Context, proj []string) error {
 	}
 
 	if enablePullRequests {
-		migratePullRequests(ctx, githubPath, gitlabPath, project, repo)
+		migratePullRequests(ctx, githubPath, gitlabPath, defaultBranch, project, repo)
 	}
 
 	return nil
 }
 
-func migratePullRequests(ctx context.Context, githubPath, gitlabPath []string, project *gitlab.Project, repo *git.Repository) {
+func migratePullRequests(ctx context.Context, githubPath, gitlabPath []string, defaultBranch string, project *gitlab.Project, repo *git.Repository) {
 	var mergeRequests []*gitlab.MergeRequest
 
 	opts := &gitlab.ListProjectMergeRequestsOptions{
@@ -940,9 +948,9 @@ func migratePullRequests(ctx context.Context, githubPath, gitlabPath []string, p
 			cleanUpBranch = true
 		}
 
-		if renameMasterToMain && mergeRequest.TargetBranch == "master" {
-			logger.Trace("changing target branch from master to main", "name", gitlabPath[1], "group", gitlabPath[0], "project_id", project.ID, "merge_request_id", mergeRequest.IID)
-			mergeRequest.TargetBranch = "main"
+		if defaultBranch != project.DefaultBranch && mergeRequest.TargetBranch == project.DefaultBranch {
+			logger.Trace("changing target trunk branch", "name", gitlabPath[1], "group", gitlabPath[0], "project_id", project.ID, "merge_request_id", mergeRequest.IID, "old_trunk", project.DefaultBranch, "new_trunk", defaultBranch)
+			mergeRequest.TargetBranch = defaultBranch
 		}
 
 		githubAuthorName := mergeRequest.Author.Name
