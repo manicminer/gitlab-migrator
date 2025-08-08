@@ -309,7 +309,10 @@ func main() {
 		return false, nil
 	}
 
-	client := githubpagination.NewClient(&retryablehttp.RoundTripper{Client: retryClient}, githubpagination.WithPerPage(100))
+	transport := &gitHubAdvancedSearchModder{
+		base: &retryablehttp.RoundTripper{Client: retryClient},
+	}
+	client := githubpagination.NewClient(transport, githubpagination.WithPerPage(100))
 
 	if githubDomain == defaultGithubDomain {
 		gh = github.NewClient(client).WithAuthToken(githubToken)
