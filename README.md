@@ -53,6 +53,11 @@ Written in Go, this is a cross-platform CLI utility that accepts the following r
         specifies the path to a CSV file describing projects to migrate (incompatible with -gitlab-project and -github-repo)
   -rename-master-to-main
         rename master branch to main and update pull requests
+  -usermap string
+       CSV file with gitlab,github username pairs. Used to map GitLab usernames to GitHub usernames for PR and comment authorship. If a GitLab user is not found, the mapping is checked before falling back to a "ghost" user. Example CSV:
+
+       gitlabuser1,githubuser1
+       gitlabuser2,githubuser2
 ```
 
 Use the `-github-user` argument to specify the GitHub username for whom the authentication token was issued (mandatory). You can also specify this with the `GITHUB_USER` environment variable.
@@ -80,6 +85,8 @@ As a bonus, this tool can transparently rename the `master` branch on your GitLa
 By default, 4 workers will be spawned to migrate up to 4 projects in parallel. You can increase or decrease this with the `-max-concurrency` argument. Note that due to GitHub API rate-limiting, you may not experience any significant speed-up. See [GitHub API docs](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api) for details.
 
 Specify `-loop` to continue migrating projects until canceled. This is useful for daemonizing the migration tool, or automatically restarting when migrating a large number of projects (or a small number of very large projects).
+
+To map GitLab usernames to GitHub usernames (for correct authorship in migrated PRs and comments), use the `-usermap` flag with a CSV file containing pairs of GitLab and GitHub usernames. If a GitLab user is not found, the tool will check this mapping before falling back to a generic "ghost" user. This helps preserve authorship and attribution during migration.
 
 ## Logging
 
