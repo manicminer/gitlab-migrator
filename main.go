@@ -676,7 +676,7 @@ func migrateProject(ctx context.Context, proj []string) error {
 		Force:      true,
 		//Prune:      true, // causes error, attempts to delete main branch
 	}); err != nil {
-		if strings.Contains(err.Error(), "already up-to-date") {
+		if errors.Is(err, git.NoErrAlreadyUpToDate) {
 			logger.Debug("repository already up-to-date on GitHub", "name", gitlabPath[1], "group", gitlabPath[0], "url", githubUrl)
 		} else {
 			return fmt.Errorf("pushing to github repo: %v", err)
@@ -689,8 +689,7 @@ func migrateProject(ctx context.Context, proj []string) error {
 		Force:      true,
 		RefSpecs:   []config.RefSpec{"refs/tags/*:refs/tags/*"},
 	}); err != nil {
-		upToDateError := errors.New("already up-to-date")
-		if errors.As(err, &upToDateError) {
+		if errors.Is(err, git.NoErrAlreadyUpToDate) {
 			logger.Debug("repository already up-to-date on GitHub", "name", gitlabPath[1], "group", gitlabPath[0], "url", githubUrl)
 		} else {
 			return fmt.Errorf("pushing to github repo: %v", err)
@@ -921,8 +920,7 @@ func migratePullRequests(ctx context.Context, githubPath, gitlabPath []string, p
 				},
 				Force: true,
 			}); err != nil {
-				upToDateError := errors.New("already up-to-date")
-				if errors.As(err, &upToDateError) {
+				if errors.Is(err, git.NoErrAlreadyUpToDate) {
 					logger.Trace("branch already exists and is up-to-date on GitHub", "owner", githubPath[0], "repo", githubPath[1], "source_branch", mergeRequest.SourceBranch, "target_branch", mergeRequest.TargetBranch)
 				} else {
 					sendErr(fmt.Errorf("pushing temporary branches to github: %v", err))
@@ -1102,8 +1100,7 @@ func migratePullRequests(ctx context.Context, githubPath, gitlabPath []string, p
 				},
 				Force: true,
 			}); err != nil {
-				upToDateError := errors.New("already up-to-date")
-				if errors.As(err, &upToDateError) {
+				if errors.Is(err, git.NoErrAlreadyUpToDate) {
 					logger.Trace("branches already deleted on GitHub", "owner", githubPath[0], "repo", githubPath[1], "pr_number", pullRequest.GetNumber(), "source_branch", mergeRequest.SourceBranch, "target_branch", mergeRequest.TargetBranch)
 				} else {
 					sendErr(fmt.Errorf("pushing branch deletions to github: %v", err))
