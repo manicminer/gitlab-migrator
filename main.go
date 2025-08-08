@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/csv"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"net/url"
@@ -61,9 +63,44 @@ type Report struct {
 	MergeRequestsCount int
 }
 
+type GitHubError struct {
+	Message          string
+	DocumentationURL string `json:"documentation_url"`
+}
+
 func sendErr(err error) {
 	errCount++
 	logger.Error(err.Error())
+}
+
+func unmarshalResp(resp *http.Response, model interface{}) error {
+	if resp == nil {
+		return nil
+	}
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("parsing response body: %+v", err)
+	}
+	resp.Body.Close()
+
+	// Trim away a BOM if present
+	respBody = bytes.TrimPrefix(respBody, []byte("\xef\xbb\xbf"))
+
+	// In some cases the respBody is empty, but not nil, so don't attempt to unmarshal this
+	if len(respBody) == 0 {
+		return nil
+	}
+
+	// Unmarshal into provided model
+	if err := json.Unmarshal(respBody, model); err != nil {
+		return fmt.Errorf("unmarshaling response body: %+v", err)
+	}
+
+	// Reassign the response body as downstream code may expect it
+	resp.Body = io.NopCloser(bytes.NewBuffer(respBody))
+
+	return nil
 }
 
 func main() {
@@ -220,6 +257,26 @@ func main() {
 			return true, nil
 		}
 
+		errResp := GitHubError{}
+		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+			if err = unmarshalResp(resp, &errResp); err != nil {
+				return false, err
+			}
+		}
+
+		// Token not authorized for org
+		if resp.StatusCode == http.StatusForbidden {
+			if match, err := regexp.MatchString("SAML enforcement", errResp.Message); err != nil {
+				return false, fmt.Errorf("matching 403 response: %v", err)
+			} else if match {
+				msg := errResp.Message
+				if errResp.DocumentationURL != "" {
+					msg += fmt.Sprintf(" - %s", errResp.DocumentationURL)
+				}
+				return false, fmt.Errorf("received 403 with response: %v", msg)
+			}
+		}
+
 		retryableStatuses := []int{
 			http.StatusTooManyRequests, // rate-limiting
 			http.StatusForbidden,       // rate-limiting
@@ -244,7 +301,7 @@ func main() {
 
 		for _, status := range retryableStatuses {
 			if resp.StatusCode == status {
-				logger.Trace("retrying failed API request", "method", requestMethod, "url", requestUrl, "status", resp.StatusCode)
+				logger.Trace("retrying failed API request", "method", requestMethod, "url", requestUrl, "status", resp.StatusCode, "message", errResp.Message)
 				return true, nil
 			}
 		}
@@ -552,9 +609,10 @@ func migrateProject(ctx context.Context, proj []string) error {
 	}
 
 	logger.Debug("updating repository settings", "owner", githubPath[0], "repo", githubPath[1])
+	description := regexp.MustCompile("\r|\n").ReplaceAllString(project.Description, " ")
 	updateRepo := github.Repository{
 		Name:              pointer(githubPath[1]),
-		Description:       &project.Description,
+		Description:       &description,
 		Homepage:          &homepage,
 		AllowAutoMerge:    pointer(true),
 		AllowMergeCommit:  pointer(true),
@@ -617,6 +675,19 @@ func migrateProject(ctx context.Context, proj []string) error {
 		RemoteName: "github",
 		Force:      true,
 		//Prune:      true, // causes error, attempts to delete main branch
+	}); err != nil {
+		if errors.Is(err, git.NoErrAlreadyUpToDate) {
+			logger.Debug("repository already up-to-date on GitHub", "name", gitlabPath[1], "group", gitlabPath[0], "url", githubUrl)
+		} else {
+			return fmt.Errorf("pushing to github repo: %v", err)
+		}
+	}
+
+	logger.Debug("pushing tags to GitHub repository", "name", gitlabPath[1], "group", gitlabPath[0], "url", githubUrl)
+	if err = repo.PushContext(ctx, &git.PushOptions{
+		RemoteName: "github",
+		Force:      true,
+		RefSpecs:   []config.RefSpec{"refs/tags/*:refs/tags/*"},
 	}); err != nil {
 		if errors.Is(err, git.NoErrAlreadyUpToDate) {
 			logger.Debug("repository already up-to-date on GitHub", "name", gitlabPath[1], "group", gitlabPath[0], "url", githubUrl)
@@ -726,6 +797,7 @@ func migratePullRequests(ctx context.Context, githubPath, gitlabPath []string, p
 						strings.Contains(pr.GetBody(), fmt.Sprintf("**GitLab MR Number** | [%d]", mergeRequest.IID)) {
 						logger.Debug("found existing pull request", "owner", githubPath[0], "repo", githubPath[1], "pr_number", pr.GetNumber())
 						pullRequest = pr
+						break
 					}
 				}
 			}
@@ -738,130 +810,127 @@ func migratePullRequests(ctx context.Context, githubPath, gitlabPath []string, p
 		if pullRequest == nil && !strings.EqualFold(mergeRequest.State, "opened") {
 			logger.Trace("searching for existing branch for closed/merged merge request", "name", gitlabPath[1], "group", gitlabPath[0], "project_id", project.ID, "merge_request_id", mergeRequest.IID, "source_branch", mergeRequest.SourceBranch)
 
-			// Only create temporary branches if the source branch has been deleted
-			if _, err = repo.Reference(plumbing.ReferenceName(mergeRequest.SourceBranch), false); err != nil {
-				// Create a worktree
-				worktree, err := repo.Worktree()
-				if err != nil {
-					sendErr(fmt.Errorf("creating worktree: %v", err))
-					failureCount++
-					continue
-				}
+			// Create a worktree
+			worktree, err := repo.Worktree()
+			if err != nil {
+				sendErr(fmt.Errorf("creating worktree: %v", err))
+				failureCount++
+				continue
+			}
 
-				// Generate temporary branch names
-				mergeRequest.SourceBranch = fmt.Sprintf("migration-source-%d/%s", mergeRequest.IID, mergeRequest.SourceBranch)
-				mergeRequest.TargetBranch = fmt.Sprintf("migration-target-%d/%s", mergeRequest.IID, mergeRequest.TargetBranch)
+			// Generate temporary branch names
+			mergeRequest.SourceBranch = fmt.Sprintf("migration-source-%d/%s", mergeRequest.IID, mergeRequest.SourceBranch)
+			mergeRequest.TargetBranch = fmt.Sprintf("migration-target-%d/%s", mergeRequest.IID, mergeRequest.TargetBranch)
 
-				logger.Trace("retrieving commits for merge request", "name", gitlabPath[1], "group", gitlabPath[0], "project_id", project.ID, "merge_request_id", mergeRequest.IID)
-				mergeRequestCommits, _, err := gl.MergeRequests.GetMergeRequestCommits(project.ID, mergeRequest.IID, &gitlab.GetMergeRequestCommitsOptions{OrderBy: "created_at", Sort: "asc"})
-				if err != nil {
-					sendErr(fmt.Errorf("retrieving merge request commits: %v", err))
-					failureCount++
-					continue
-				}
+			logger.Trace("retrieving commits for merge request", "name", gitlabPath[1], "group", gitlabPath[0], "project_id", project.ID, "merge_request_id", mergeRequest.IID)
+			mergeRequestCommits, _, err := gl.MergeRequests.GetMergeRequestCommits(project.ID, mergeRequest.IID, &gitlab.GetMergeRequestCommitsOptions{OrderBy: "created_at", Sort: "asc"})
+			if err != nil {
+				sendErr(fmt.Errorf("retrieving merge request commits: %v", err))
+				failureCount++
+				continue
+			}
 
-				// Some merge requests have no commits, disregard these
-				if len(mergeRequestCommits) == 0 {
-					continue
-				}
+			// Some merge requests have no commits, disregard these
+			if len(mergeRequestCommits) == 0 {
+				continue
+			}
 
-				// API is buggy, ordering is not respected, so we'll reorder by commit datestamp
-				sort.Slice(mergeRequestCommits, func(i, j int) bool {
-					return mergeRequestCommits[i].CommittedDate.Before(*mergeRequestCommits[j].CommittedDate)
-				})
+			// API is buggy, ordering is not respected, so we'll reorder by commit datestamp
+			sort.Slice(mergeRequestCommits, func(i, j int) bool {
+				return mergeRequestCommits[i].CommittedDate.Before(*mergeRequestCommits[j].CommittedDate)
+			})
 
-				if mergeRequestCommits[0] == nil {
-					sendErr(fmt.Errorf("start commit for merge request %d is nil", mergeRequest.IID))
-					failureCount++
-					continue
-				}
-				if mergeRequestCommits[len(mergeRequestCommits)-1] == nil {
-					sendErr(fmt.Errorf("end commit for merge request %d is nil", mergeRequest.IID))
-					failureCount++
-					continue
-				}
+			if mergeRequestCommits[0] == nil {
+				sendErr(fmt.Errorf("start commit for merge request %d is nil", mergeRequest.IID))
+				failureCount++
+				continue
+			}
+			if mergeRequestCommits[len(mergeRequestCommits)-1] == nil {
+				sendErr(fmt.Errorf("end commit for merge request %d is nil", mergeRequest.IID))
+				failureCount++
+				continue
+			}
 
-				logger.Trace("inspecting start commit", "name", gitlabPath[1], "group", gitlabPath[0], "project_id", project.ID, "merge_request_id", mergeRequest.IID, "sha", mergeRequestCommits[0].ShortID)
-				startCommit, err := object.GetCommit(repo.Storer, plumbing.NewHash(mergeRequestCommits[0].ID))
-				if err != nil {
-					sendErr(fmt.Errorf("loading start commit: %v", err))
-					failureCount++
-					continue
-				}
+			logger.Trace("inspecting start commit", "name", gitlabPath[1], "group", gitlabPath[0], "project_id", project.ID, "merge_request_id", mergeRequest.IID, "sha", mergeRequestCommits[0].ShortID)
+			startCommit, err := object.GetCommit(repo.Storer, plumbing.NewHash(mergeRequestCommits[0].ID))
+			if err != nil {
+				sendErr(fmt.Errorf("loading start commit: %v", err))
+				failureCount++
+				continue
+			}
 
-				if startCommit.NumParents() == 0 {
-					// Orphaned commit, start with an empty branch
-					// TODO: this isn't working as hoped, try to figure this out. in the meantime, we'll skip MRs from orphaned branches
-					//if err = repo.Storer.SetReference(plumbing.NewSymbolicReference("HEAD", plumbing.ReferenceName(fmt.Sprintf("refs/heads/%s", mergeRequest.TargetBranch)))); err != nil {
-					//	return fmt.Errorf("creating empty branch: %s", err)
-					//}
-					sendErr(fmt.Errorf("start commit %s for merge request %d has no parents", mergeRequestCommits[0].ShortID, mergeRequest.IID))
-					continue
-				} else {
-					// Sometimes we will be starting from a merge commit, so look for a suitable parent commit to branch out from
-					var startCommitParent *object.Commit
-					for i := 0; i < startCommit.NumParents(); i++ {
-						logger.Trace("inspecting start commit parent", "name", gitlabPath[1], "group", gitlabPath[0], "project_id", project.ID, "merge_request_id", mergeRequest.IID, "sha", mergeRequestCommits[0].ShortID)
-						startCommitParent, err = startCommit.Parent(0)
-						if err != nil {
-							sendErr(fmt.Errorf("loading parent commit: %s", err))
-						}
-
-						continue
+			if startCommit.NumParents() == 0 {
+				// Orphaned commit, start with an empty branch
+				// TODO: this isn't working as hoped, try to figure this out. in the meantime, we'll skip MRs from orphaned branches
+				//if err = repo.Storer.SetReference(plumbing.NewSymbolicReference("HEAD", plumbing.ReferenceName(fmt.Sprintf("refs/heads/%s", mergeRequest.TargetBranch)))); err != nil {
+				//	return fmt.Errorf("creating empty branch: %s", err)
+				//}
+				sendErr(fmt.Errorf("start commit %s for merge request %d has no parents", mergeRequestCommits[0].ShortID, mergeRequest.IID))
+				continue
+			} else {
+				// Sometimes we will be starting from a merge commit, so look for a suitable parent commit to branch out from
+				var startCommitParent *object.Commit
+				for i := 0; i < startCommit.NumParents(); i++ {
+					logger.Trace("inspecting start commit parent", "name", gitlabPath[1], "group", gitlabPath[0], "project_id", project.ID, "merge_request_id", mergeRequest.IID, "sha", mergeRequestCommits[0].ShortID)
+					startCommitParent, err = startCommit.Parent(0)
+					if err != nil {
+						sendErr(fmt.Errorf("loading parent commit: %s", err))
 					}
 
-					if startCommitParent == nil {
-						sendErr(fmt.Errorf("identifying suitable parent of start commit %s for merge request %d", mergeRequestCommits[0].ShortID, mergeRequest.IID))
-						failureCount++
-					}
-
-					logger.Trace("creating target branch for merged/closed merge request", "name", gitlabPath[1], "group", gitlabPath[0], "project_id", project.ID, "merge_request_id", mergeRequest.IID, "branch", mergeRequest.TargetBranch, "sha", startCommitParent.Hash)
-					if err = worktree.Checkout(&git.CheckoutOptions{
-						Create: true,
-						Force:  true,
-						Branch: plumbing.NewBranchReferenceName(mergeRequest.TargetBranch),
-						Hash:   startCommitParent.Hash,
-					}); err != nil {
-						sendErr(fmt.Errorf("checking out temporary target branch: %v", err))
-						failureCount++
-						continue
-					}
+					continue
 				}
 
-				endHash := plumbing.NewHash(mergeRequestCommits[len(mergeRequestCommits)-1].ID)
-				logger.Trace("creating source branch for merged/closed merge request", "name", gitlabPath[1], "group", gitlabPath[0], "project_id", project.ID, "merge_request_id", mergeRequest.IID, "branch", mergeRequest.SourceBranch, "sha", endHash)
+				if startCommitParent == nil {
+					sendErr(fmt.Errorf("identifying suitable parent of start commit %s for merge request %d", mergeRequestCommits[0].ShortID, mergeRequest.IID))
+					failureCount++
+				}
+
+				logger.Trace("creating target branch for merged/closed merge request", "name", gitlabPath[1], "group", gitlabPath[0], "project_id", project.ID, "merge_request_id", mergeRequest.IID, "branch", mergeRequest.TargetBranch, "sha", startCommitParent.Hash)
 				if err = worktree.Checkout(&git.CheckoutOptions{
 					Create: true,
 					Force:  true,
-					Branch: plumbing.NewBranchReferenceName(mergeRequest.SourceBranch),
-					Hash:   endHash,
+					Branch: plumbing.NewBranchReferenceName(mergeRequest.TargetBranch),
+					Hash:   startCommitParent.Hash,
 				}); err != nil {
-					sendErr(fmt.Errorf("checking out temporary source branch: %v", err))
+					sendErr(fmt.Errorf("checking out temporary target branch: %v", err))
 					failureCount++
 					continue
 				}
-
-				logger.Debug("pushing branches for merged/closed merge request", "owner", githubPath[0], "repo", githubPath[1], "source_branch", mergeRequest.SourceBranch, "target_branch", mergeRequest.TargetBranch)
-				if err = repo.PushContext(ctx, &git.PushOptions{
-					RemoteName: "github",
-					RefSpecs: []config.RefSpec{
-						config.RefSpec(fmt.Sprintf("refs/heads/%[1]s:refs/heads/%[1]s", mergeRequest.SourceBranch)),
-						config.RefSpec(fmt.Sprintf("refs/heads/%[1]s:refs/heads/%[1]s", mergeRequest.TargetBranch)),
-					},
-					Force: true,
-				}); err != nil {
-					if errors.Is(err, git.NoErrAlreadyUpToDate) {
-						logger.Trace("branch already exists and is up-to-date on GitHub", "owner", githubPath[0], "repo", githubPath[1], "source_branch", mergeRequest.SourceBranch, "target_branch", mergeRequest.TargetBranch)
-					} else {
-						sendErr(fmt.Errorf("pushing temporary branches to github: %v", err))
-						failureCount++
-						continue
-					}
-				}
-
-				// We will clean up these temporary branches after configuring and closing the pull request
-				cleanUpBranch = true
 			}
+
+			endHash := plumbing.NewHash(mergeRequestCommits[len(mergeRequestCommits)-1].ID)
+			logger.Trace("creating source branch for merged/closed merge request", "name", gitlabPath[1], "group", gitlabPath[0], "project_id", project.ID, "merge_request_id", mergeRequest.IID, "branch", mergeRequest.SourceBranch, "sha", endHash)
+			if err = worktree.Checkout(&git.CheckoutOptions{
+				Create: true,
+				Force:  true,
+				Branch: plumbing.NewBranchReferenceName(mergeRequest.SourceBranch),
+				Hash:   endHash,
+			}); err != nil {
+				sendErr(fmt.Errorf("checking out temporary source branch: %v", err))
+				failureCount++
+				continue
+			}
+
+			logger.Debug("pushing branches for merged/closed merge request", "owner", githubPath[0], "repo", githubPath[1], "source_branch", mergeRequest.SourceBranch, "target_branch", mergeRequest.TargetBranch)
+			if err = repo.PushContext(ctx, &git.PushOptions{
+				RemoteName: "github",
+				RefSpecs: []config.RefSpec{
+					config.RefSpec(fmt.Sprintf("refs/heads/%[1]s:refs/heads/%[1]s", mergeRequest.SourceBranch)),
+					config.RefSpec(fmt.Sprintf("refs/heads/%[1]s:refs/heads/%[1]s", mergeRequest.TargetBranch)),
+				},
+				Force: true,
+			}); err != nil {
+				if errors.Is(err, git.NoErrAlreadyUpToDate) {
+					logger.Trace("branch already exists and is up-to-date on GitHub", "owner", githubPath[0], "repo", githubPath[1], "source_branch", mergeRequest.SourceBranch, "target_branch", mergeRequest.TargetBranch)
+				} else {
+					sendErr(fmt.Errorf("pushing temporary branches to github: %v", err))
+					failureCount++
+					continue
+				}
+			}
+
+			// We will clean up these temporary branches after configuring and closing the pull request
+			cleanUpBranch = true
 		}
 
 		if renameMasterToMain && mergeRequest.TargetBranch == "master" {
@@ -988,6 +1057,19 @@ func migratePullRequests(ctx context.Context, githubPath, gitlabPath []string, p
 				newState = pointer("closed")
 			}
 
+			if pullRequest.State != nil && newState != nil && *pullRequest.State != *newState {
+				pullRequestState := &github.PullRequest{
+					Number: pullRequest.Number,
+					State:  newState,
+				}
+
+				if pullRequest, _, err = gh.PullRequests.Edit(ctx, githubPath[0], githubPath[1], pullRequestState.GetNumber(), pullRequestState); err != nil {
+					sendErr(fmt.Errorf("updating pull request state: %v", err))
+					failureCount++
+					continue
+				}
+			}
+
 			if (newState != nil && (pullRequest.State == nil || *pullRequest.State != *newState)) ||
 				(pullRequest.Title == nil || *pullRequest.Title != mergeRequest.Title) ||
 				(pullRequest.Body == nil || *pullRequest.Body != body) ||
@@ -997,7 +1079,6 @@ func migratePullRequests(ctx context.Context, githubPath, gitlabPath []string, p
 				pullRequest.Title = &mergeRequest.Title
 				pullRequest.Body = &body
 				pullRequest.Draft = &mergeRequest.Draft
-				pullRequest.State = newState
 				pullRequest.MaintainerCanModify = nil
 				if pullRequest, _, err = gh.PullRequests.Edit(ctx, githubPath[0], githubPath[1], pullRequest.GetNumber(), pullRequest); err != nil {
 					sendErr(fmt.Errorf("updating pull request: %v", err))
