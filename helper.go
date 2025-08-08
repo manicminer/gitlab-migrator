@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/google/go-github/v69/github"
+	"github.com/google/go-github/v74/github"
 	"github.com/xanzy/go-gitlab"
 )
 
