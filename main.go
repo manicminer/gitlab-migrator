@@ -753,12 +753,16 @@ func migratePullRequests(ctx context.Context, githubPath, gitlabPath []string, p
 			break
 		}
 
+		sourceBranchForClosedMergeRequest := fmt.Sprintf("migration-source-%d/%s", mergeRequest.IID, mergeRequest.SourceBranch)
+		targetBranchForClosedMergeRequest := fmt.Sprintf("migration-target-%d/%s", mergeRequest.IID, mergeRequest.TargetBranch)
+
 		var cleanUpBranch bool
 		var pullRequest *github.PullRequest
 
 		logger.Debug("searching for any existing pull request", "owner", githubPath[0], "repo", githubPath[1], "merge_request_id", mergeRequest.IID)
-		//query := fmt.Sprintf("repo:%s/%s is:pr head:%s", githubPath[0], githubPath[1], mergeRequest.SourceBranch)
-		query := fmt.Sprintf("repo:%s/%s is:pr", githubPath[0], githubPath[1])
+		sourceBranches := []string{mergeRequest.SourceBranch, sourceBranchForClosedMergeRequest}
+		branchQuery := fmt.Sprintf("head:%s", strings.Join(sourceBranches, " OR head:"))
+		query := fmt.Sprintf("repo:%s/%s AND is:pr AND (%s)", githubPath[0], githubPath[1], branchQuery)
 		searchResult, err := getGithubSearchResults(ctx, query)
 		if err != nil {
 			sendErr(fmt.Errorf("listing pull requests: %v", err))
@@ -822,8 +826,8 @@ func migratePullRequests(ctx context.Context, githubPath, gitlabPath []string, p
 			}
 
 			// Generate temporary branch names
-			mergeRequest.SourceBranch = fmt.Sprintf("migration-source-%d/%s", mergeRequest.IID, mergeRequest.SourceBranch)
-			mergeRequest.TargetBranch = fmt.Sprintf("migration-target-%d/%s", mergeRequest.IID, mergeRequest.TargetBranch)
+			mergeRequest.SourceBranch = sourceBranchForClosedMergeRequest
+			mergeRequest.TargetBranch = targetBranchForClosedMergeRequest
 
 			logger.Trace("retrieving commits for merge request", "name", gitlabPath[1], "group", gitlabPath[0], "project_id", project.ID, "merge_request_id", mergeRequest.IID)
 			mergeRequestCommits, _, err := gl.MergeRequests.GetMergeRequestCommits(project.ID, mergeRequest.IID, &gitlab.GetMergeRequestCommitsOptions{OrderBy: "created_at", Sort: "asc"})
