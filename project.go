@@ -391,11 +391,12 @@ func (p *project) migrateMergeRequest(ctx context.Context, mergeRequest *gitlab.
 		}
 
 		if startCommit.NumParents() == 0 {
-			// Orphaned commit, start with an empty branch
-			// TODO: this isn't working as hoped, try to figure this out. in the meantime, we'll skip MRs from orphaned branches
-			//if err = repo.Storer.SetReference(plumbing.NewSymbolicReference("HEAD", plumbing.ReferenceName(fmt.Sprintf("refs/heads/%s", mergeRequest.TargetBranch)))); err != nil {
-			//	return fmt.Errorf("creating empty branch: %s", err)
-			//}
+			// Orphaned commit, we cannot open a pull request as GitHub rejects it
+			if skipInvalidMergeRequests {
+				logger.Info("skipping invalid merge request as start commit has no parents", "name", p.gitlabPath[1], "group", p.gitlabPath[0], "project_id", p.project.ID, "merge_request_id", mergeRequest.IID, "sha", startCommit.Hash)
+				return nil
+			}
+
 			return fmt.Errorf("start commit %s for merge request %d has no parents", mergeRequestCommits[0].ShortID, mergeRequest.IID)
 		} else {
 			// Sometimes we will be starting from a merge commit, so look for a suitable parent commit to branch out from
