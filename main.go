@@ -707,10 +707,25 @@ func migrateProject(ctx context.Context, proj []string) error {
 		return fmt.Errorf("adding github remote: %v", err)
 	}
 
-	logger.Debug("force-pushing to GitHub repository", "name", gitlabPath[1], "group", gitlabPath[0], "url", githubUrl)
+	logger.Debug("determining branches to push", "name", gitlabPath[1], "group", gitlabPath[0], "url", githubUrl)
+	branches, err := repo.Branches()
+	if err != nil {
+		return fmt.Errorf("retrieving branches: %v", err)
+	}
+
+	refSpecs := make([]config.RefSpec, 0)
+	if err = branches.ForEach(func(ref *plumbing.Reference) error {
+		refSpecs = append(refSpecs, config.RefSpec(fmt.Sprintf("%[1]s:%[1]s", ref.Name())))
+		return nil
+	}); err != nil {
+		return fmt.Errorf("parsing branches: %v", err)
+	}
+
+	logger.Debug("force-pushing branches to GitHub repository", "name", gitlabPath[1], "group", gitlabPath[0], "url", githubUrl, "count", len(refSpecs))
 	if err = repo.PushContext(ctx, &git.PushOptions{
 		RemoteName: "github",
 		Force:      true,
+		RefSpecs:   refSpecs,
 		//Prune:      true, // causes error, attempts to delete main branch
 	}); err != nil {
 		if errors.Is(err, git.NoErrAlreadyUpToDate) {
@@ -720,7 +735,7 @@ func migrateProject(ctx context.Context, proj []string) error {
 		}
 	}
 
-	logger.Debug("pushing tags to GitHub repository", "name", gitlabPath[1], "group", gitlabPath[0], "url", githubUrl)
+	logger.Debug("force-pushing tags to GitHub repository", "name", gitlabPath[1], "group", gitlabPath[0], "url", githubUrl)
 	if err = repo.PushContext(ctx, &git.PushOptions{
 		RemoteName: "github",
 		Force:      true,
