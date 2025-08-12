@@ -4,10 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/csv"
-	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
 	"math"
 	"net/http"
 	"os"
@@ -56,41 +54,6 @@ type Report struct {
 type GitHubError struct {
 	Message          string
 	DocumentationURL string `json:"documentation_url"`
-}
-
-func sendErr(err error) {
-	errCount++
-	logger.Error(err.Error())
-}
-
-func unmarshalResp(resp *http.Response, model interface{}) error {
-	if resp == nil {
-		return nil
-	}
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("parsing response body: %+v", err)
-	}
-	_ = resp.Body.Close()
-
-	// Trim away a BOM if present
-	respBody = bytes.TrimPrefix(respBody, []byte("\xef\xbb\xbf"))
-
-	// In some cases the respBody is empty, but not nil, so don't attempt to unmarshal this
-	if len(respBody) == 0 {
-		return nil
-	}
-
-	// Unmarshal into provided model
-	if err := json.Unmarshal(respBody, model); err != nil {
-		return fmt.Errorf("unmarshaling response body: %+v", err)
-	}
-
-	// Reassign the response body as downstream code may expect it
-	resp.Body = io.NopCloser(bytes.NewBuffer(respBody))
-
-	return nil
 }
 
 func main() {
