@@ -53,6 +53,13 @@ func newProject(slugs []string) (*project, error) {
 		return nil, fmt.Errorf("no matching GitLab project found: %s", slugs[0])
 	}
 
+	p.defaultBranch = "main"
+	if renameTrunkBranch != "" {
+		p.defaultBranch = renameTrunkBranch
+	} else if !renameMasterToMain && p.project.DefaultBranch != "" {
+		p.defaultBranch = p.project.DefaultBranch
+	}
+
 	return p, nil
 }
 
@@ -64,6 +71,29 @@ type project struct {
 	githubPath    []string
 }
 
+func (p *project) createRepo(ctx context.Context, homepage string, repoDeleted bool) error {
+	if repoDeleted {
+		logger.Warn("recreating GitHub repository", "owner", p.githubPath[0], "repo", p.githubPath[1])
+	} else {
+		logger.Debug("repository not found on GitHub, proceeding to create", "owner", p.githubPath[0], "repo", p.githubPath[1])
+	}
+	newRepo := github.Repository{
+		Name:          pointer(p.githubPath[1]),
+		Description:   &p.project.Description,
+		Homepage:      &homepage,
+		DefaultBranch: &p.defaultBranch,
+		Private:       pointer(true),
+		HasIssues:     pointer(true),
+		HasProjects:   pointer(true),
+		HasWiki:       pointer(true),
+	}
+	if _, _, err := gh.Repositories.Create(ctx, p.githubPath[0], &newRepo); err != nil {
+		return fmt.Errorf("creating github repo: %v", err)
+	}
+
+	return nil
+}
+
 func (p *project) migrate(ctx context.Context) error {
 	cloneUrl, err := url.Parse(p.project.HTTPURLToRepo)
 	if err != nil {
@@ -71,18 +101,6 @@ func (p *project) migrate(ctx context.Context) error {
 	}
 
 	logger.Info("mirroring repository from GitLab to GitHub", "name", p.gitlabPath[1], "group", p.gitlabPath[0], "github_org", p.githubPath[0], "github_repo", p.githubPath[1])
-
-	user, err := getGithubUser(ctx, p.githubPath[0])
-	if err != nil {
-		return fmt.Errorf("retrieving github user: %v", err)
-	}
-
-	var org string
-	if strings.EqualFold(*user.Type, "organization") {
-		org = p.githubPath[0]
-	} else if !strings.EqualFold(*user.Type, "user") || !strings.EqualFold(*user.Login, p.githubPath[0]) {
-		return fmt.Errorf("configured owner is neither an organization nor the current user: %s", p.githubPath[0])
-	}
 
 	logger.Debug("checking for existing repository on GitHub", "owner", p.githubPath[0], "repo", p.githubPath[1])
 	_, _, err = gh.Repositories.Get(ctx, p.githubPath[0], p.githubPath[1])
@@ -92,46 +110,21 @@ func (p *project) migrate(ctx context.Context) error {
 		return fmt.Errorf("retrieving github repo: %v", err)
 	}
 
-	var createRepo, repoDeleted bool
+	homepage := fmt.Sprintf("https://%s/%s/%s", gitlabDomain, p.gitlabPath[0], p.gitlabPath[1])
+
 	if err != nil {
-		createRepo = true
+		// Repository not found
+		if err = p.createRepo(ctx, homepage, false); err != nil {
+			return err
+		}
 	} else if deleteExistingRepos {
 		logger.Warn("existing repository was found on GitHub, proceeding to delete", "owner", p.githubPath[0], "repo", p.githubPath[1])
 		if _, err = gh.Repositories.Delete(ctx, p.githubPath[0], p.githubPath[1]); err != nil {
 			return fmt.Errorf("deleting existing github repo: %v", err)
 		}
 
-		createRepo = true
-		repoDeleted = true
-	}
-
-	defaultBranch := "main"
-	if renameTrunkBranch != "" {
-		defaultBranch = renameTrunkBranch
-	} else if !renameMasterToMain && p.project.DefaultBranch != "" {
-		defaultBranch = p.project.DefaultBranch
-	}
-
-	homepage := fmt.Sprintf("https://%s/%s/%s", gitlabDomain, p.gitlabPath[0], p.gitlabPath[1])
-
-	if createRepo {
-		if repoDeleted {
-			logger.Warn("recreating GitHub repository", "owner", p.githubPath[0], "repo", p.githubPath[1])
-		} else {
-			logger.Debug("repository not found on GitHub, proceeding to create", "owner", p.githubPath[0], "repo", p.githubPath[1])
-		}
-		newRepo := github.Repository{
-			Name:          pointer(p.githubPath[1]),
-			Description:   &p.project.Description,
-			Homepage:      &homepage,
-			DefaultBranch: &defaultBranch,
-			Private:       pointer(true),
-			HasIssues:     pointer(true),
-			HasProjects:   pointer(true),
-			HasWiki:       pointer(true),
-		}
-		if _, _, err = gh.Repositories.Create(ctx, org, &newRepo); err != nil {
-			return fmt.Errorf("creating github repo: %v", err)
+		if err = p.createRepo(ctx, homepage, true); err != nil {
+			return err
 		}
 	}
 
@@ -168,12 +161,12 @@ func (p *project) migrate(ctx context.Context) error {
 		return fmt.Errorf("cloning gitlab repo: %v", err)
 	}
 
-	if defaultBranch != p.project.DefaultBranch {
+	if p.defaultBranch != p.project.DefaultBranch {
 		if gitlabTrunk, err := p.repo.Reference(plumbing.NewBranchReferenceName(p.project.DefaultBranch), false); err == nil {
-			logger.Info("renaming trunk branch prior to push", "name", p.gitlabPath[1], "group", p.gitlabPath[0], "gitlab_trunk", p.project.DefaultBranch, "github_trunk", defaultBranch, "sha", gitlabTrunk.Hash())
+			logger.Info("renaming trunk branch prior to push", "name", p.gitlabPath[1], "group", p.gitlabPath[0], "gitlab_trunk", p.project.DefaultBranch, "github_trunk", p.defaultBranch, "sha", gitlabTrunk.Hash())
 
-			logger.Debug("creating new trunk branch", "name", p.gitlabPath[1], "group", p.gitlabPath[0], "github_trunk", defaultBranch, "sha", gitlabTrunk.Hash())
-			githubTrunk := plumbing.NewHashReference(plumbing.NewBranchReferenceName(defaultBranch), gitlabTrunk.Hash())
+			logger.Debug("creating new trunk branch", "name", p.gitlabPath[1], "group", p.gitlabPath[0], "github_trunk", p.defaultBranch, "sha", gitlabTrunk.Hash())
+			githubTrunk := plumbing.NewHashReference(plumbing.NewBranchReferenceName(p.defaultBranch), gitlabTrunk.Hash())
 			if err = p.repo.Storer.SetReference(githubTrunk); err != nil {
 				return fmt.Errorf("creating trunk branch: %v", err)
 			}
@@ -238,9 +231,9 @@ func (p *project) migrate(ctx context.Context) error {
 		}
 	}
 
-	logger.Debug("setting default repository branch", "owner", p.githubPath[0], "repo", p.githubPath[1], "branch_name", defaultBranch)
+	logger.Debug("setting default repository branch", "owner", p.githubPath[0], "repo", p.githubPath[1], "branch_name", p.defaultBranch)
 	updateRepo = github.Repository{
-		DefaultBranch: &defaultBranch,
+		DefaultBranch: &p.defaultBranch,
 	}
 	if _, _, err = gh.Repositories.Edit(ctx, p.githubPath[0], p.githubPath[1], &updateRepo); err != nil {
 		return fmt.Errorf("setting default branch: %v", err)
@@ -292,7 +285,6 @@ func (p *project) migrateMergeRequests(ctx context.Context) {
 		} else {
 			successCount++
 		}
-		// call out to migrateMergeRequest and increment counters
 	}
 
 	skippedCount := totalCount - successCount - failureCount
@@ -309,7 +301,6 @@ func (p *project) migrateMergeRequest(ctx context.Context, mergeRequest *gitlab.
 	sourceBranchForClosedMergeRequest := fmt.Sprintf("migration-source-%d/%s", mergeRequest.IID, mergeRequest.SourceBranch)
 	targetBranchForClosedMergeRequest := fmt.Sprintf("migration-target-%d/%s", mergeRequest.IID, mergeRequest.TargetBranch)
 
-	var cleanUpBranch bool
 	var pullRequest *github.PullRequest
 
 	logger.Debug("searching for any existing pull request", "owner", p.githubPath[0], "repo", p.githubPath[1], "merge_request_id", mergeRequest.IID)
@@ -463,7 +454,24 @@ func (p *project) migrateMergeRequest(ctx context.Context, mergeRequest *gitlab.
 		}
 
 		// We will clean up these temporary branches after configuring and closing the pull request
-		cleanUpBranch = true
+		defer func() {
+			logger.Debug("deleting temporary branches for closed pull request", "owner", p.githubPath[0], "repo", p.githubPath[1], "pr_number", pullRequest.GetNumber(), "source_branch", mergeRequest.SourceBranch, "target_branch", mergeRequest.TargetBranch)
+			if err := p.repo.PushContext(ctx, &git.PushOptions{
+				RemoteName: "github",
+				RefSpecs: []config.RefSpec{
+					config.RefSpec(fmt.Sprintf(":refs/heads/%s", mergeRequest.SourceBranch)),
+					config.RefSpec(fmt.Sprintf(":refs/heads/%s", mergeRequest.TargetBranch)),
+				},
+				Force: true,
+			}); err != nil {
+				if errors.Is(err, git.NoErrAlreadyUpToDate) {
+					logger.Trace("branches already deleted on GitHub", "owner", p.githubPath[0], "repo", p.githubPath[1], "pr_number", pullRequest.GetNumber(), "source_branch", mergeRequest.SourceBranch, "target_branch", mergeRequest.TargetBranch)
+				} else {
+					sendErr(fmt.Errorf("pushing branch deletions to github: %v", err))
+				}
+			}
+
+		}()
 	}
 
 	if p.defaultBranch != p.project.DefaultBranch && mergeRequest.TargetBranch == p.project.DefaultBranch {
@@ -563,6 +571,10 @@ func (p *project) migrateMergeRequest(ctx context.Context, mergeRequest *gitlab.
 			Draft:               &mergeRequest.Draft,
 		}
 		if pullRequest, _, err = gh.PullRequests.Create(ctx, p.githubPath[0], p.githubPath[1], &newPullRequest); err != nil {
+			if mergeRequest.State == "closed" && strings.Contains(err.Error(), "No commits between") {
+				logger.Debug("skipping closed merge request as the change is already present in trunk branch", "owner", p.githubPath[0], "repo", p.githubPath[1], "merge_request_id", mergeRequest.IID)
+				return nil
+			}
 			return fmt.Errorf("creating pull request: %v", err)
 		}
 
@@ -610,24 +622,6 @@ func (p *project) migrateMergeRequest(ctx context.Context, mergeRequest *gitlab.
 			}
 		} else {
 			logger.Trace("existing pull request is up-to-date", "owner", p.githubPath[0], "repo", p.githubPath[1], "pr_number", pullRequest.GetNumber())
-		}
-	}
-
-	if cleanUpBranch {
-		logger.Debug("deleting temporary branches for closed pull request", "owner", p.githubPath[0], "repo", p.githubPath[1], "pr_number", pullRequest.GetNumber(), "source_branch", mergeRequest.SourceBranch, "target_branch", mergeRequest.TargetBranch)
-		if err = p.repo.PushContext(ctx, &git.PushOptions{
-			RemoteName: "github",
-			RefSpecs: []config.RefSpec{
-				config.RefSpec(fmt.Sprintf(":refs/heads/%s", mergeRequest.SourceBranch)),
-				config.RefSpec(fmt.Sprintf(":refs/heads/%s", mergeRequest.TargetBranch)),
-			},
-			Force: true,
-		}); err != nil {
-			if errors.Is(err, git.NoErrAlreadyUpToDate) {
-				logger.Trace("branches already deleted on GitHub", "owner", p.githubPath[0], "repo", p.githubPath[1], "pr_number", pullRequest.GetNumber(), "source_branch", mergeRequest.SourceBranch, "target_branch", mergeRequest.TargetBranch)
-			} else {
-				return fmt.Errorf("pushing branch deletions to github: %v", err)
-			}
 		}
 	}
 
