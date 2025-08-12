@@ -53,6 +53,13 @@ func newProject(slugs []string) (*project, error) {
 		return nil, fmt.Errorf("no matching GitLab project found: %s", slugs[0])
 	}
 
+	p.defaultBranch = "main"
+	if renameTrunkBranch != "" {
+		p.defaultBranch = renameTrunkBranch
+	} else if !renameMasterToMain && p.project.DefaultBranch != "" {
+		p.defaultBranch = p.project.DefaultBranch
+	}
+
 	return p, nil
 }
 
@@ -64,6 +71,29 @@ type project struct {
 	githubPath    []string
 }
 
+func (p *project) createRepo(ctx context.Context, homepage string, repoDeleted bool) error {
+	if repoDeleted {
+		logger.Warn("recreating GitHub repository", "owner", p.githubPath[0], "repo", p.githubPath[1])
+	} else {
+		logger.Debug("repository not found on GitHub, proceeding to create", "owner", p.githubPath[0], "repo", p.githubPath[1])
+	}
+	newRepo := github.Repository{
+		Name:          pointer(p.githubPath[1]),
+		Description:   &p.project.Description,
+		Homepage:      &homepage,
+		DefaultBranch: &p.defaultBranch,
+		Private:       pointer(true),
+		HasIssues:     pointer(true),
+		HasProjects:   pointer(true),
+		HasWiki:       pointer(true),
+	}
+	if _, _, err := gh.Repositories.Create(ctx, p.githubPath[0], &newRepo); err != nil {
+		return fmt.Errorf("creating github repo: %v", err)
+	}
+
+	return nil
+}
+
 func (p *project) migrate(ctx context.Context) error {
 	cloneUrl, err := url.Parse(p.project.HTTPURLToRepo)
 	if err != nil {
@@ -71,18 +101,6 @@ func (p *project) migrate(ctx context.Context) error {
 	}
 
 	logger.Info("mirroring repository from GitLab to GitHub", "name", p.gitlabPath[1], "group", p.gitlabPath[0], "github_org", p.githubPath[0], "github_repo", p.githubPath[1])
-
-	user, err := getGithubUser(ctx, p.githubPath[0])
-	if err != nil {
-		return fmt.Errorf("retrieving github user: %v", err)
-	}
-
-	var org string
-	if strings.EqualFold(*user.Type, "organization") {
-		org = p.githubPath[0]
-	} else if !strings.EqualFold(*user.Type, "user") || !strings.EqualFold(*user.Login, p.githubPath[0]) {
-		return fmt.Errorf("configured owner is neither an organization nor the current user: %s", p.githubPath[0])
-	}
 
 	logger.Debug("checking for existing repository on GitHub", "owner", p.githubPath[0], "repo", p.githubPath[1])
 	_, _, err = gh.Repositories.Get(ctx, p.githubPath[0], p.githubPath[1])
@@ -92,46 +110,21 @@ func (p *project) migrate(ctx context.Context) error {
 		return fmt.Errorf("retrieving github repo: %v", err)
 	}
 
-	var createRepo, repoDeleted bool
+	homepage := fmt.Sprintf("https://%s/%s/%s", gitlabDomain, p.gitlabPath[0], p.gitlabPath[1])
+
 	if err != nil {
-		createRepo = true
+		// Repository not found
+		if err = p.createRepo(ctx, homepage, false); err != nil {
+			return err
+		}
 	} else if deleteExistingRepos {
 		logger.Warn("existing repository was found on GitHub, proceeding to delete", "owner", p.githubPath[0], "repo", p.githubPath[1])
 		if _, err = gh.Repositories.Delete(ctx, p.githubPath[0], p.githubPath[1]); err != nil {
 			return fmt.Errorf("deleting existing github repo: %v", err)
 		}
 
-		createRepo = true
-		repoDeleted = true
-	}
-
-	defaultBranch := "main"
-	if renameTrunkBranch != "" {
-		defaultBranch = renameTrunkBranch
-	} else if !renameMasterToMain && p.project.DefaultBranch != "" {
-		defaultBranch = p.project.DefaultBranch
-	}
-
-	homepage := fmt.Sprintf("https://%s/%s/%s", gitlabDomain, p.gitlabPath[0], p.gitlabPath[1])
-
-	if createRepo {
-		if repoDeleted {
-			logger.Warn("recreating GitHub repository", "owner", p.githubPath[0], "repo", p.githubPath[1])
-		} else {
-			logger.Debug("repository not found on GitHub, proceeding to create", "owner", p.githubPath[0], "repo", p.githubPath[1])
-		}
-		newRepo := github.Repository{
-			Name:          pointer(p.githubPath[1]),
-			Description:   &p.project.Description,
-			Homepage:      &homepage,
-			DefaultBranch: &defaultBranch,
-			Private:       pointer(true),
-			HasIssues:     pointer(true),
-			HasProjects:   pointer(true),
-			HasWiki:       pointer(true),
-		}
-		if _, _, err = gh.Repositories.Create(ctx, org, &newRepo); err != nil {
-			return fmt.Errorf("creating github repo: %v", err)
+		if err = p.createRepo(ctx, homepage, true); err != nil {
+			return err
 		}
 	}
 
@@ -168,12 +161,12 @@ func (p *project) migrate(ctx context.Context) error {
 		return fmt.Errorf("cloning gitlab repo: %v", err)
 	}
 
-	if defaultBranch != p.project.DefaultBranch {
+	if p.defaultBranch != p.project.DefaultBranch {
 		if gitlabTrunk, err := p.repo.Reference(plumbing.NewBranchReferenceName(p.project.DefaultBranch), false); err == nil {
-			logger.Info("renaming trunk branch prior to push", "name", p.gitlabPath[1], "group", p.gitlabPath[0], "gitlab_trunk", p.project.DefaultBranch, "github_trunk", defaultBranch, "sha", gitlabTrunk.Hash())
+			logger.Info("renaming trunk branch prior to push", "name", p.gitlabPath[1], "group", p.gitlabPath[0], "gitlab_trunk", p.project.DefaultBranch, "github_trunk", p.defaultBranch, "sha", gitlabTrunk.Hash())
 
-			logger.Debug("creating new trunk branch", "name", p.gitlabPath[1], "group", p.gitlabPath[0], "github_trunk", defaultBranch, "sha", gitlabTrunk.Hash())
-			githubTrunk := plumbing.NewHashReference(plumbing.NewBranchReferenceName(defaultBranch), gitlabTrunk.Hash())
+			logger.Debug("creating new trunk branch", "name", p.gitlabPath[1], "group", p.gitlabPath[0], "github_trunk", p.defaultBranch, "sha", gitlabTrunk.Hash())
+			githubTrunk := plumbing.NewHashReference(plumbing.NewBranchReferenceName(p.defaultBranch), gitlabTrunk.Hash())
 			if err = p.repo.Storer.SetReference(githubTrunk); err != nil {
 				return fmt.Errorf("creating trunk branch: %v", err)
 			}
@@ -238,9 +231,9 @@ func (p *project) migrate(ctx context.Context) error {
 		}
 	}
 
-	logger.Debug("setting default repository branch", "owner", p.githubPath[0], "repo", p.githubPath[1], "branch_name", defaultBranch)
+	logger.Debug("setting default repository branch", "owner", p.githubPath[0], "repo", p.githubPath[1], "branch_name", p.defaultBranch)
 	updateRepo = github.Repository{
-		DefaultBranch: &defaultBranch,
+		DefaultBranch: &p.defaultBranch,
 	}
 	if _, _, err = gh.Repositories.Edit(ctx, p.githubPath[0], p.githubPath[1], &updateRepo); err != nil {
 		return fmt.Errorf("setting default branch: %v", err)
