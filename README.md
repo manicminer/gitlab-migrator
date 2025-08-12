@@ -6,12 +6,13 @@ This tool can migrate projects from GitLab to repositories on GitHub. It current
 * migrating merge requests and translating them into pull requests, including closed/merged ones
 * renaming the `master` branch to `main` along the way
 
-It does not support migrating issues, wikis or any other primitive at this time. PRs welcome!
+It does not support migrating issues, wikis or any other primitive at this time. PRs welcome! (Although please don't waste your time suggesting swathing changes by an LLM)
 
 Both gitlab.com and GitLab self-hosted are supported, as well as github.com and GitHub Enterprise (latter untested).
 
 ## Installing
 
+Download the [latest release](https://github.com/manicminer/gitlab-migrator/releases/latest) for your platform & architecture. Alternatively,
 ```
 go install github.com/manicminer/gitlab-migrator
 ```
@@ -38,7 +39,7 @@ Written in Go, this is a cross-platform CLI utility that accepts the following r
   -github-repo string
         the GitHub repository to migrate to
   -github-user string
-        specifies the GitHub user to use, who will author any migrated PRs. can also be sourced from GITHUB_USER environment variable (required)
+        specifies the GitHub user to use, who will author any migrated PRs (required)
   -gitlab-domain string
         specifies the GitLab domain to use (default "gitlab.com")
   -gitlab-project string
@@ -52,13 +53,16 @@ Written in Go, this is a cross-platform CLI utility that accepts the following r
   -projects-csv string
         specifies the path to a CSV file describing projects to migrate (incompatible with -gitlab-project and -github-repo)
   -rename-master-to-main
-        rename master branch to main and update pull requests
+        rename master branch to main and update pull requests (incompatible with -rename-trunk-branch)
+  -rename-trunk-branch string
+        specifies the new trunk branch name (incompatible with -rename-master-to-main)
+  -report
+        report on primitives to be migrated instead of beginning migration```
   -usermap string
-       CSV file with gitlab,github username pairs. Used to map GitLab usernames to GitHub usernames for PR and comment authorship. If a GitLab user is not found, the mapping is checked before falling back to a "ghost" user. Example CSV:
+        CSV file with gitlab,github username pairs. Used to map GitLab usernames to GitHub usernames for PR and comment authorship. If a GitLab user is not found, the mapping is checked before falling back to a "ghost" user. Example CSV:
 
-       gitlabuser1,githubuser1
-       gitlabuser2,githubuser2
-```
+          gitlabuser1,githubuser1
+          gitlabuser2,githubuser2
 
 Use the `-github-user` argument to specify the GitHub username for whom the authentication token was issued (mandatory). You can also specify this with the `GITHUB_USER` environment variable.
 
@@ -80,7 +84,7 @@ Note: If the destination repository does not exist, this tool will attempt to cr
 
 Specify the location of a self-hosted instance of GitLab with the `-gitlab-domain` argument, or a GitHub Enterprise instance with the `-github-domain` argument.
 
-As a bonus, this tool can transparently rename the `master` branch on your GitLab repository, to `main` on the migrated GitHub repository - enable with the `-rename-master-to-main` argument.
+As a bonus, this tool can transparently rename the trunk branch on your GitHub repository - enable with the `-rename-trunk-branch` argument. This will also work for any open merge requests as they are translated to pull requests.
 
 By default, 4 workers will be spawned to migrate up to 4 projects in parallel. You can increase or decrease this with the `-max-concurrency` argument. Note that due to GitHub API rate-limiting, you may not experience any significant speed-up. See [GitHub API docs](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api) for details.
 
