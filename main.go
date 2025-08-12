@@ -4,10 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/csv"
-	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
 	"math"
 	"net/http"
 	"os"
@@ -33,7 +31,7 @@ const (
 )
 
 var loop, report bool
-var deleteExistingRepos, enablePullRequests, renameMasterToMain bool
+var deleteExistingRepos, enablePullRequests, renameMasterToMain, skipInvalidMergeRequests bool
 var githubDomain, githubRepo, githubToken, githubUser, gitlabDomain, gitlabProject, gitlabToken, projectsCsvPath, renameTrunkBranch string
 
 var (
@@ -56,41 +54,6 @@ type Report struct {
 type GitHubError struct {
 	Message          string
 	DocumentationURL string `json:"documentation_url"`
-}
-
-func sendErr(err error) {
-	errCount++
-	logger.Error(err.Error())
-}
-
-func unmarshalResp(resp *http.Response, model interface{}) error {
-	if resp == nil {
-		return nil
-	}
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("parsing response body: %+v", err)
-	}
-	_ = resp.Body.Close()
-
-	// Trim away a BOM if present
-	respBody = bytes.TrimPrefix(respBody, []byte("\xef\xbb\xbf"))
-
-	// In some cases the respBody is empty, but not nil, so don't attempt to unmarshal this
-	if len(respBody) == 0 {
-		return nil
-	}
-
-	// Unmarshal into provided model
-	if err := json.Unmarshal(respBody, model); err != nil {
-		return fmt.Errorf("unmarshaling response body: %+v", err)
-	}
-
-	// Reassign the response body as downstream code may expect it
-	resp.Body = io.NopCloser(bytes.NewBuffer(respBody))
-
-	return nil
 }
 
 func main() {
@@ -141,6 +104,7 @@ func main() {
 	flag.BoolVar(&deleteExistingRepos, "delete-existing-repos", false, "whether existing repositories should be deleted before migrating")
 	flag.BoolVar(&enablePullRequests, "migrate-pull-requests", false, "whether pull requests should be migrated")
 	flag.BoolVar(&renameMasterToMain, "rename-master-to-main", false, "rename master branch to main and update pull requests (incompatible with -rename-trunk-branch)")
+	flag.BoolVar(&skipInvalidMergeRequests, "skip-invalid-merge-requests", false, "when true, will log and skip invalid merge requests instead of raising an error")
 
 	flag.StringVar(&githubDomain, "github-domain", defaultGithubDomain, "specifies the GitHub domain to use")
 	flag.StringVar(&githubRepo, "github-repo", "", "the GitHub repository to migrate to")
