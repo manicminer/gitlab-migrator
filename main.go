@@ -40,6 +40,7 @@ var (
 	gh             *github.Client
 	gl             *gitlab.Client
 	maxConcurrency int
+	version        = "development"
 )
 
 type Project = []string
@@ -97,6 +98,9 @@ func main() {
 		os.Exit(1)
 	}
 
+	var showVersion bool
+	fmt.Printf(fmt.Sprintf("gitlab-migrator %s\n", version))
+
 	flag.BoolVar(&loop, "loop", false, "continue migrating until canceled")
 	flag.BoolVar(&report, "report", false, "report on primitives to be migrated instead of beginning migration")
 
@@ -104,6 +108,7 @@ func main() {
 	flag.BoolVar(&enablePullRequests, "migrate-pull-requests", false, "whether pull requests should be migrated")
 	flag.BoolVar(&renameMasterToMain, "rename-master-to-main", false, "rename master branch to main and update pull requests (incompatible with -rename-trunk-branch)")
 	flag.BoolVar(&skipInvalidMergeRequests, "skip-invalid-merge-requests", false, "when true, will log and skip invalid merge requests instead of raising an error")
+	flag.BoolVar(&showVersion, "version", false, "output version information")
 
 	flag.StringVar(&githubDomain, "github-domain", defaultGithubDomain, "specifies the GitHub domain to use")
 	flag.StringVar(&githubRepo, "github-repo", "", "the GitHub repository to migrate to")
@@ -116,6 +121,10 @@ func main() {
 	flag.IntVar(&maxConcurrency, "max-concurrency", 4, "how many projects to migrate in parallel")
 
 	flag.Parse()
+
+	if showVersion {
+		return
+	}
 
 	if githubUser == "" {
 		githubUser = os.Getenv("GITHUB_USER")
