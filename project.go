@@ -32,21 +32,9 @@ func newProject(slugs []string) (*project, error) {
 	}
 
 	logger.Info("searching for GitLab project", "name", p.gitlabPath[1], "group", p.gitlabPath[0])
-	searchTerm := p.gitlabPath[1]
-	projectResult, _, err := gl.Projects.ListProjects(&gitlab.ListProjectsOptions{Search: &searchTerm})
+	p.project, _, err = gl.Projects.GetProject(slugs[0], nil)
 	if err != nil {
-		return nil, fmt.Errorf("listing projects: %v", err)
-	}
-
-	for _, item := range projectResult {
-		if item == nil {
-			continue
-		}
-
-		if item.PathWithNamespace == slugs[0] {
-			logger.Debug("found GitLab project", "name", p.gitlabPath[1], "group", p.gitlabPath[0], "project_id", item.ID)
-			p.project = item
-		}
+		return nil, fmt.Errorf("retrieving project: %v", err)
 	}
 
 	if p.project == nil {
