@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/go-github/v74/github"
@@ -106,6 +107,28 @@ func getGitlabUser(username string) (*gitlab.User, error) {
 
 func pointer[T any](v T) *T {
 	return &v
+}
+
+func parseProjectSlugs(slugs []string) ([]string, []string, error) {
+	if len(slugs) != 2 {
+		return nil, nil, fmt.Errorf("too many fields")
+	}
+
+	delimPosition := strings.LastIndex(slugs[0], "/")
+	gitlabPath := []string{
+		slugs[0][:delimPosition],
+		slugs[0][delimPosition+1:],
+	}
+	githubPath := strings.Split(slugs[1], "/")
+
+	if len(gitlabPath) != 2 {
+		return nil, nil, fmt.Errorf("invalid GitLab project: %s", slugs[0])
+	}
+	if len(githubPath) != 2 {
+		return nil, nil, fmt.Errorf("invalid GitHub project: %s", slugs[1])
+	}
+
+	return gitlabPath, githubPath, nil
 }
 
 func roundDuration(d, r time.Duration) time.Duration {
