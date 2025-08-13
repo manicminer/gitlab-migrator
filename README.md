@@ -57,9 +57,20 @@ Written in Go, this is a cross-platform CLI utility that accepts the following r
   -rename-trunk-branch string
         specifies the new trunk branch name (incompatible with -rename-master-to-main)
   -report
-        report on primitives to be migrated instead of beginning migration```
+        report on primitives to be migrated instead of beginning migration
+  -skip-invalid-merge-requests
+        when true, will log and skip invalid merge requests instead of raising an error
+```
+
+## Authentication
+
+For authentication, the `GITLAB_TOKEN` and `GITHUB_TOKEN` environment variables must be populated. You cannot specify tokens as command-line arguments.
 
 Use the `-github-user` argument to specify the GitHub username for whom the authentication token was issued (mandatory). You can also specify this with the `GITHUB_USER` environment variable.
+
+Specify the location of a self-hosted instance of GitLab with the `-gitlab-domain` argument, or a GitHub Enterprise instance with the `-github-domain` argument.
+
+## Specify repositories
 
 You can specify an individual GitLab project with the `-gitlab-project` argument, along with the target GitHub repository with the `-github-repo` argument.
 
@@ -69,17 +80,38 @@ Alternatively, you can supply the path to a CSV file with the `-projects-csv` ar
 gitlab-group/gitlab-project-name,github-org-or-user/github-repo-name
 ```
 
-For authentication, the `GITLAB_TOKEN` and `GITHUB_TOKEN` environment variables must be populated. You cannot specify tokens as command-line arguments.
+If the destination repository does not exist, this tool will attempt to create a private repository. If the destination repo already exists, it will be used unless you specify `-delete-existing-repos`
+
+> [!WARNING]  
+> To delete existing GitHub repos prior to migrating, pass the `-delete-existing-repos` argument. _This is potentially dangerous, you won't be asked for confirmation!_
+
+## Pull requests
 
 To enable migration of GitLab merge requests to GitHub pull requests (including closed/merged ones!), specify `-migrate-pull-requests`.
 
-To delete existing GitHub repos prior to migrating, pass the `-delete-existing-repos` argument. _This is potentially dangerous, you won't be asked for confirmation._
+Whilst the git repository itself will be migrated verbatim, the pull requests are managed using the GitHub API and typically will be authored by the person supplying the authentication token.
 
-Note: If the destination repository does not exist, this tool will attempt to create a private repository. If the destination repo already exists, it will be used unless you specify `-delete-existing-repos`
+Each pull request, along with every comment, will be prepended with a Markdown table showing the original author and some other metadata that is useful to know.  This is also used to map pull requests and their comments to their counterparts in GitLab and enables the tool to be idempotent.
 
-Specify the location of a self-hosted instance of GitLab with the `-gitlab-domain` argument, or a GitHub Enterprise instance with the `-github-domain` argument.
+As a bonus, if your GitLab users add the URL to their GitHub profile in the `Website` field of their GitLab profile, this tool will add a link to their GitHub profile in the markdown header of any PR or comment they originally authored.
+
+This tool also migrates merged/closed merge requests from your GitLab projects. It does this by reconstructing temporary branches in each repo, pushing them to GitHub, creating then closing the pull request, and lastly deleting the temporary branches. Once the tool has completed, you should not have any of these temporary branches in your repo - although GitHub will not garbage collect them immediately such that you can click the `Restore branch` button in any of these PRs.
+
+If you have a large number of merge requests, or projects with a long history spanning many GitLab upgrades, you may wish to specify the `-skip-invalid-merge-requests` argument. This will cause the tool to emit INFO messages for merge requests that it considers invalid, such as those that are still marked as Open but have no source/head branch, or where there is no diff for a closed merge request. Without this option, an error will be logged instead.
+
+_Example migrated pull request (open)_
+
+![example migrated open pull request](pr-example-open.jpeg)
+
+_Example migrated pull request (closed)_
+
+![example migrated closed pull request](pr-example-closed.jpeg)
+
+## Renaming the default/trunk branch
 
 As a bonus, this tool can transparently rename the trunk branch on your GitHub repository - enable with the `-rename-trunk-branch` argument. This will also work for any open merge requests as they are translated to pull requests.
+
+## Concurrency
 
 By default, 4 workers will be spawned to migrate up to 4 projects in parallel. You can increase or decrease this with the `-max-concurrency` argument. Note that due to GitHub API rate-limiting, you may not experience any significant speed-up. See [GitHub API docs](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api) for details.
 
@@ -105,24 +137,6 @@ This tool tries to be idempotent. You can run it over and over and it will patch
 _Note that this tool performs a forced mirror push, so it's not recommended to run this tool after commencing work in the target repository._
 
 For pull requests and their comments, the corresponding IDs from GitLab are added to the Markdown header, this is parsed to enable idempotence (see next section).
-
-## Pull Requests
-
-Whilst the git repository will be migrated verbatim, the pull requests are managed using the GitHub API and typically will be authored by the person supplying the authentication token.
-
-Each pull request, along with every comment, will be prepended with a Markdown table showing the original author and some other metadata that is useful to know.  This is also used to map pull requests and their comments to their counterparts in GitLab and enables the tool to be idempotent.
-
-As a bonus, if your GitLab users add the URL to their GitHub profile in the `Website` field of their GitLab profile, this tool will add a link to their GitHub profile in the markdown header of any PR or comment they originally authored.
-
-This tool also migrates merged/closed merge requests from your GitLab projects. It does this by reconstructing temporary branches in each repo, pushing them to GitHub, creating then closing the pull request, and lastly deleting the temporary branches. Once the tool has completed, you should not have any of these temporary branches in your repo - although GitHub will not garbage collect them immediately such that you can click the `Restore branch` button in any of these PRs.
-
-_Example migrated pull request (open)_
-
-![example migrated open pull request](pr-example-open.jpeg)
-
-_Example migrated pull request (closed)_
-
-![example migrated closed pull request](pr-example-closed.jpeg)
 
 ## Contributing, reporting bugs etc...
 
