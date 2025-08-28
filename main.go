@@ -86,18 +86,6 @@ func main() {
 
 	cache = newObjectCache()
 
-	githubToken = os.Getenv("GITHUB_TOKEN")
-	if githubToken == "" {
-		logger.Error("missing environment variable", "name", "GITHUB_TOKEN")
-		os.Exit(1)
-	}
-
-	gitlabToken = os.Getenv("GITLAB_TOKEN")
-	if gitlabToken == "" {
-		logger.Error("missing environment variable", "name", "GITLAB_TOKEN")
-		os.Exit(1)
-	}
-
 	var showVersion bool
 	fmt.Printf(fmt.Sprintf("gitlab-migrator %s\n", version))
 
@@ -124,6 +112,18 @@ func main() {
 
 	if showVersion {
 		return
+	}
+
+	githubToken = os.Getenv("GITHUB_TOKEN")
+	if githubToken == "" {
+		logger.Error("missing environment variable", "name", "GITHUB_TOKEN")
+		os.Exit(1)
+	}
+
+	gitlabToken = os.Getenv("GITLAB_TOKEN")
+	if gitlabToken == "" {
+		logger.Error("missing environment variable", "name", "GITLAB_TOKEN")
+		os.Exit(1)
 	}
 
 	if githubUser == "" {
