@@ -576,8 +576,8 @@ func (p *project) migrateMergeRequest(ctx context.Context, mergeRequest *gitlab.
 			Draft:               &mergeRequest.Draft,
 		}
 		if pullRequest, _, err = gh.PullRequests.Create(ctx, p.githubPath[0], p.githubPath[1], &newPullRequest); err != nil {
-			if mergeRequest.State == "closed" && strings.Contains(err.Error(), "No commits between") {
-				logger.Debug("skipping closed merge request as the change is already present in trunk branch", "owner", p.githubPath[0], "repo", p.githubPath[1], "merge_request_id", mergeRequest.IID)
+			if strings.Contains(err.Error(), "No commits between") {
+				logger.Debug("skipping merge request as the change is already present in trunk branch", "owner", p.githubPath[0], "repo", p.githubPath[1], "merge_request_id", mergeRequest.IID)
 				return false, nil
 			}
 			return false, fmt.Errorf("creating pull request: %v", err)
