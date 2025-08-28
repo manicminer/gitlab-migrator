@@ -32,6 +32,7 @@ const (
 var loop, report bool
 var deleteExistingRepos, enablePullRequests, renameMasterToMain, skipInvalidMergeRequests bool
 var githubDomain, githubRepo, githubToken, githubUser, gitlabDomain, gitlabProject, gitlabToken, projectsCsvPath, renameTrunkBranch string
+var mergeRequestsAge int
 
 var (
 	cache          *objectCache
@@ -86,19 +87,8 @@ func main() {
 
 	cache = newObjectCache()
 
-	githubToken = os.Getenv("GITHUB_TOKEN")
-	if githubToken == "" {
-		logger.Error("missing environment variable", "name", "GITHUB_TOKEN")
-		os.Exit(1)
-	}
-
-	gitlabToken = os.Getenv("GITLAB_TOKEN")
-	if gitlabToken == "" {
-		logger.Error("missing environment variable", "name", "GITLAB_TOKEN")
-		os.Exit(1)
-	}
-
 	var showVersion bool
+	var mergeRequestsAgeRaw string
 	fmt.Printf(fmt.Sprintf("gitlab-migrator %s\n", version))
 
 	flag.BoolVar(&loop, "loop", false, "continue migrating until canceled")
@@ -116,6 +106,7 @@ func main() {
 	flag.StringVar(&gitlabDomain, "gitlab-domain", defaultGitlabDomain, "specifies the GitLab domain to use")
 	flag.StringVar(&gitlabProject, "gitlab-project", "", "the GitLab project to migrate")
 	flag.StringVar(&projectsCsvPath, "projects-csv", "", "specifies the path to a CSV file describing projects to migrate (incompatible with -gitlab-project and -github-repo)")
+	flag.StringVar(&mergeRequestsAgeRaw, "merge-requests-max-age", "", "optional maximum age in days of merge requests to migrate")
 	flag.StringVar(&renameTrunkBranch, "rename-trunk-branch", "", "specifies the new trunk branch name (incompatible with -rename-master-to-main)")
 
 	flag.IntVar(&maxConcurrency, "max-concurrency", 4, "how many projects to migrate in parallel")
@@ -124,6 +115,18 @@ func main() {
 
 	if showVersion {
 		return
+	}
+
+	githubToken = os.Getenv("GITHUB_TOKEN")
+	if githubToken == "" {
+		logger.Error("missing environment variable", "name", "GITHUB_TOKEN")
+		os.Exit(1)
+	}
+
+	gitlabToken = os.Getenv("GITLAB_TOKEN")
+	if gitlabToken == "" {
+		logger.Error("missing environment variable", "name", "GITLAB_TOKEN")
+		os.Exit(1)
 	}
 
 	if githubUser == "" {
@@ -148,6 +151,13 @@ func main() {
 	if renameMasterToMain && renameTrunkBranch != "" {
 		logger.Error("cannot specify -rename-master-to-main and -rename-trunk-branch together")
 		os.Exit(1)
+	}
+
+	if mergeRequestsAgeRaw != "" {
+		if mergeRequestsAge, err = strconv.Atoi(mergeRequestsAgeRaw); err != nil {
+			logger.Error("must specify an integer for -merge-requests-age")
+			os.Exit(1)
+		}
 	}
 
 	retryClient := &retryablehttp.Client{

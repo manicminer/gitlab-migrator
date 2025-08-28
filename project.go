@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-git/go-billy/v5/memfs"
 	"github.com/go-git/go-git/v5"
@@ -240,6 +241,10 @@ func (p *project) migrateMergeRequests(ctx context.Context) {
 	opts := &gitlab.ListProjectMergeRequestsOptions{
 		OrderBy: pointer("created_at"),
 		Sort:    pointer("asc"),
+	}
+
+	if mergeRequestsAge > 0 {
+		opts.CreatedAfter = pointer(time.Now().AddDate(0, 0, -mergeRequestsAge))
 	}
 
 	logger.Debug("retrieving GitLab merge requests", "name", p.gitlabPath[1], "group", p.gitlabPath[0], "project_id", p.project.ID)

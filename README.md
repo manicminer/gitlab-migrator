@@ -47,6 +47,8 @@ Written in Go, this is a cross-platform CLI utility that accepts the following r
         continue migrating until canceled
   -max-concurrency int
         how many projects to migrate in parallel (default 4)
+  -merge-requests-max-age string
+        optional maximum age in days of merge requests to migrate
   -migrate-pull-requests
         whether pull requests should be migrated
   -projects-csv string
@@ -59,6 +61,8 @@ Written in Go, this is a cross-platform CLI utility that accepts the following r
         report on primitives to be migrated instead of beginning migration
   -skip-invalid-merge-requests
         when true, will log and skip invalid merge requests instead of raising an error
+  -version
+        output version information
 ```
 
 ## Authentication
@@ -97,6 +101,8 @@ As a bonus, if your GitLab users add the URL to their GitHub profile in the `Web
 This tool also migrates merged/closed merge requests from your GitLab projects. It does this by reconstructing temporary branches in each repo, pushing them to GitHub, creating then closing the pull request, and lastly deleting the temporary branches. Once the tool has completed, you should not have any of these temporary branches in your repo - although GitHub will not garbage collect them immediately such that you can click the `Restore branch` button in any of these PRs.
 
 If you have a large number of merge requests, or projects with a long history spanning many GitLab upgrades, you may wish to specify the `-skip-invalid-merge-requests` argument. This will cause the tool to emit INFO messages for merge requests that it considers invalid, such as those that are still marked as Open but have no source/head branch, or where there is no diff for a closed merge request. Without this option, an error will be logged instead.
+
+Similarly, you can specify a maximum age for merge requests to migrate with the `-merge-requests-max-age` argument, which is useful for 'topping off' projects that are already migrated.
 
 _Example migrated pull request (open)_
 
