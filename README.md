@@ -61,6 +61,8 @@ Written in Go, this is a cross-platform CLI utility that accepts the following r
         report on primitives to be migrated instead of beginning migration
   -skip-invalid-merge-requests
         when true, will log and skip invalid merge requests instead of raising an error
+  -trim-branches-on-github
+        when true, will delete any branches on GitHub that are no longer present in GitLab
   -version
         output version information
 ```

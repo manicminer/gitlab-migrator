@@ -8,7 +8,8 @@ import (
 )
 
 const (
-	githubPullRequestCacheType uint8 = iota
+	githubBranchesCacheType uint8 = iota
+	githubPullRequestCacheType
 	githubSearchResultsCacheType
 	githubUserCacheType
 	gitlabUserCacheType
@@ -21,6 +22,7 @@ type objectCache struct {
 
 func newObjectCache() *objectCache {
 	store := make(map[uint8]map[string]any)
+	store[githubBranchesCacheType] = make(map[string]any)
 	store[githubPullRequestCacheType] = make(map[string]any)
 	store[githubSearchResultsCacheType] = make(map[string]any)
 	store[githubUserCacheType] = make(map[string]any)
@@ -30,6 +32,21 @@ func newObjectCache() *objectCache {
 		mutex: new(sync.RWMutex),
 		store: store,
 	}
+}
+
+func (c objectCache) getGithubBranches(query string) []*github.Branch {
+	c.mutex.RLock()
+	defer c.mutex.RUnlock()
+	if v, ok := c.store[githubBranchesCacheType][query]; ok {
+		return v.([]*github.Branch)
+	}
+	return nil
+}
+
+func (c objectCache) setGithubBranches(query string, result []*github.Branch) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	c.store[githubBranchesCacheType][query] = result
 }
 
 func (c objectCache) getGithubPullRequest(query string) *github.PullRequest {
