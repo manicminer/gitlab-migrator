@@ -185,8 +185,10 @@ func (p *project) migrate(ctx context.Context) error {
 		return fmt.Errorf("retrieving branches: %v", err)
 	}
 
+	gitlabBranches := make([]string, 0)
 	refSpecs := make([]config.RefSpec, 0)
 	if err = branches.ForEach(func(ref *plumbing.Reference) error {
+		gitlabBranches = append(gitlabBranches, ref.Name().Short())
 		refSpecs = append(refSpecs, config.RefSpec(fmt.Sprintf("%[1]s:%[1]s", ref.Name())))
 		return nil
 	}); err != nil {
@@ -204,6 +206,41 @@ func (p *project) migrate(ctx context.Context) error {
 			logger.Debug("repository already up-to-date on GitHub", "name", p.gitlabPath[1], "group", p.gitlabPath[0], "url", githubUrl)
 		} else {
 			return fmt.Errorf("pushing to github repo: %v", err)
+		}
+	}
+
+	if trimGithubBranches {
+		logger.Debug("determining old branches to trim on GitHub repository", "name", p.gitlabPath[1], "group", p.gitlabPath[0], "url", githubUrl)
+		refSpecsToDelete := make([]config.RefSpec, 0)
+		githubBranches, err := getGithubBranches(ctx, p.githubPath[0], p.githubPath[1])
+		if err != nil {
+			return fmt.Errorf("listing branches from GitHub: %v", err)
+		}
+		for _, githubBranch := range githubBranches {
+			found := false
+			for _, gitlabBranch := range gitlabBranches {
+				if githubBranch.Name != nil && *githubBranch.Name == gitlabBranch {
+					found = true
+					break
+				}
+			}
+			if !found {
+				refSpecsToDelete = append(refSpecsToDelete, config.RefSpec(fmt.Sprintf(":refs/heads/%s", *githubBranch.Name)))
+			}
+		}
+
+		logger.Debug("trimming old branches on GitHub repository", "name", p.gitlabPath[1], "group", p.gitlabPath[0], "url", githubUrl, "count", len(refSpecs))
+		if err = p.repo.PushContext(ctx, &git.PushOptions{
+			RemoteName: "github",
+			Force:      true,
+			RefSpecs:   refSpecsToDelete,
+			//Prune:      true, // causes error, attempts to delete main branch
+		}); err != nil {
+			if errors.Is(err, git.NoErrAlreadyUpToDate) {
+				logger.Debug("repository already up-to-date on GitHub", "name", p.gitlabPath[1], "group", p.gitlabPath[0], "url", githubUrl)
+			} else {
+				return fmt.Errorf("pushing to github repo: %v", err)
+			}
 		}
 	}
 

@@ -14,6 +14,28 @@ import (
 	"github.com/xanzy/go-gitlab"
 )
 
+func getGithubBranches(ctx context.Context, owner, repo string) ([]*github.Branch, error) {
+	var err error
+	cacheToken := fmt.Sprintf("%s/%s", owner, repo)
+	result := cache.getGithubBranches(cacheToken)
+	if result == nil {
+		logger.Debug("listing branches")
+		result, _, err = gh.Repositories.ListBranches(ctx, owner, repo, nil)
+		if err != nil {
+			return nil, fmt.Errorf("listing branches: %v", err)
+		}
+
+		if result == nil {
+			return nil, fmt.Errorf("nil result was returned when listing branches for repo: %s/%s", owner, repo)
+		}
+
+		logger.Trace("caching GitHub branches", "repo", fmt.Sprintf("%s/%s", owner, repo))
+		cache.setGithubBranches(cacheToken, result)
+	}
+
+	return result, nil
+}
+
 func getGithubPullRequest(ctx context.Context, org, repo string, prNumber int) (*github.PullRequest, error) {
 	var err error
 	cacheToken := fmt.Sprintf("%s/%s/%d", org, repo, prNumber)
